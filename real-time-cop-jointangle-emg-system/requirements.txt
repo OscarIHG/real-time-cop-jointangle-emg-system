@@ -1,0 +1,7 @@
+# numpy
+# matplotlib
+# mediapipe
+# Phidget22
+# pybluez
+# pandas
+# pyarrow

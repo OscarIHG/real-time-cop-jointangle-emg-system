@@ -1,0 +1,1 @@
+# PoseWorker (acquisition only)
