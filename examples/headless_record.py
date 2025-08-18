@@ -1,13 +1,18 @@
-# Example: record without GUI using Recorder
 # -*- coding: utf-8 -*-
 """
-Headless recorder: runs EMG, CoP, and Pose without GUI and optionally saves a merged CSV.
+Headless recorder (EMG/CoP/Pose) with graceful degradation if devices are offline.
 
 Interactive mode:
-  - If you run this file with no CLI args (e.g., from VS Code "Run"), it prompts for params.
+  - Run without CLI args (e.g., VS Code "Run") and it will prompt for:
+    * Duration
+    * Base filename + optional auto suffix
+    * Reference stream (auto/emg/cop/pose/angle)
+    * Which devices to start (EMG/CoP/Pose)
+    * Confirm start and whether to save at the end
 
-Non-interactive mode (from repo root):
-  python -m examples.headless_record --duration 15 --name test1 --reference auto --append-suffix --save
+Non-interactive (CLI examples, from repo root):
+  python -m examples.headless_record --duration 12 --name test --append-suffix --reference cop --save
+  python -m examples.headless_record --duration 10 --no-emg --save
 """
 
 import os
@@ -20,11 +25,9 @@ from datetime import datetime
 if __package__ is None or __package__ == "":
     sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 
-from acquisition_systems.workers.emg import EMGWorker
-from acquisition_systems.workers.cop import CoPWorker
-from acquisition_systems.workers.pose import PoseWorker
-from acquisition_systems.common.utils import get_latest
 from acquisition_systems.common.config import load_config
+from acquisition_systems.common.runtime import start_workers_forgiving, stop_workers, StartResult
+from acquisition_systems.common.utils import get_latest
 from acquisition_systems.recorder import Recorder
 
 
@@ -42,6 +45,11 @@ def dated_subdir(base: str) -> str:
     os.makedirs(path, exist_ok=True)
     return path
 
+def auto_suffix(t_start: float) -> str:
+    stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+    elapsed = int(max(0, time.time() - (t_start or time.time())))
+    return f"{stamp}_{elapsed}s"
+
 
 # ------------------ interactive helpers ------------------
 def _input_with_default(prompt: str, default: str) -> str:
@@ -52,13 +60,13 @@ def _input_with_default(prompt: str, default: str) -> str:
     return s if s else default
 
 def _input_yes_no(prompt: str, default_yes: bool = True) -> bool:
-    default_tag = "Y/n" if default_yes else "y/N"
+    tag = "Y/n" if default_yes else "y/N"
     try:
-        s = input(f"{prompt} [{default_tag}]: ").strip().lower()
+        s = input(f"{prompt} [{tag}]: ").strip().lower()
     except EOFError:
         return default_yes
-    if s == "" and default_yes: return True
-    if s == "" and not default_yes: return False
+    if s == "":
+        return default_yes
     return s in ("y", "yes")
 
 def _choose_reference(default: str = "auto") -> str:
@@ -70,15 +78,9 @@ def _choose_reference(default: str = "auto") -> str:
         print("Invalid choice. Please enter one of:", ", ".join(choices))
 
 
-def auto_suffix(t_start: float) -> str:
-    stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
-    elapsed = int(max(0, time.time() - (t_start or time.time())))
-    return f"{stamp}_{elapsed}s"
-
-
 # ------------------ main ------------------
 def main():
-    parser = argparse.ArgumentParser(description="Headless multi-rate recorder (EMG/CoP/Pose).")
+    parser = argparse.ArgumentParser(description="Headless multi-rate recorder with forgiving device start.")
     parser.add_argument("--duration", type=float, help="Seconds to record.")
     parser.add_argument("--name", type=str, help="Base filename (no extension). If empty/omitted, auto name.")
     parser.add_argument("--reference", type=str, choices=["auto","emg","cop","pose","angle"],
@@ -88,20 +90,25 @@ def main():
     g = parser.add_mutually_exclusive_group()
     g.add_argument("--save", action="store_true", help="Save without prompting.")
     g.add_argument("--no-save", action="store_true", help="Do not save (skip) without prompting.")
+    # device toggles (optional)
+    parser.add_argument("--no-emg", action="store_true", help="Skip EMG device.")
+    parser.add_argument("--no-cop", action="store_true", help="Skip CoP device.")
+    parser.add_argument("--no-pose", action="store_true", help="Skip Pose device.")
     parser.add_argument("--no-prompt", action="store_true",
                         help="Disable interactive prompts even if no CLI args are provided.")
     args = parser.parse_args()
 
-    # Decide interactive vs non-interactive
-    interactive = (len(sys.argv) == 1 and sys.stdin.isatty()) or (not args.no_prompt and args.duration is None and args.name is None and args.reference is None)
-
     cfg = load_config()
 
-    # -------- Interactive parameter collection --------
+    # Decide interactive vs non-interactive
+    interactive = (len(sys.argv) == 1 and sys.stdin.isatty()) and not args.no_prompt
+
     if interactive:
         print("=== Headless Recorder (interactive) ===")
-        # EMG MAC (optional override)
+
+        # Optionally override EMG MAC
         emg_mac = _input_with_default("EMG MAC address", cfg.emg_mac)
+        cfg.emg_mac = emg_mac
 
         # Duration
         while True:
@@ -112,10 +119,13 @@ def main():
             except ValueError:
                 print("Invalid number. Try again.")
 
-        # Name
-        base = _input_with_default("Base filename (leave blank for auto)", "").strip()
+        # Enable/disable devices
+        want_emg = _input_yes_no("Start EMG device?", default_yes=True)
+        want_cop = _input_yes_no("Start CoP device?", default_yes=True)
+        want_pose = _input_yes_no("Start Pose device (camera)?", default_yes=True)
 
-        # Append suffix?
+        # Base name and suffix
+        base = _input_with_default("Base filename (leave blank for auto)", "").strip()
         append_suffix = False
         if base:
             append_suffix = _input_yes_no("Append auto suffix to filename?", default_yes=False)
@@ -123,31 +133,39 @@ def main():
         # Reference
         reference = _choose_reference(default="auto")
 
-        # Confirm before starting
+        # Summary + confirm
         print("\nSummary:")
-        print(f"  EMG MAC      : {emg_mac}")
+        print(f"  EMG MAC      : {cfg.emg_mac}")
         print(f"  Duration     : {duration:.2f} s")
+        print(f"  Devices      : EMG={'ON' if want_emg else 'OFF'}, CoP={'ON' if want_cop else 'OFF'}, Pose={'ON' if want_pose else 'OFF'}")
         print(f"  Base name    : {base or '(auto)'}")
         print(f"  Append suffix: {append_suffix}")
         print(f"  Reference    : {reference}")
         if not _input_yes_no("Start recording now?", default_yes=True):
             print("Aborted by user before starting.")
             return
-
     else:
-        # Non-interactive: read from args/env/config
-        emg_mac = cfg.emg_mac
+        # Non-interactive
         duration = max(1.0, float(args.duration if args.duration is not None else 20.0))
         base = (args.name or "").strip() if args.name is not None else ""
         append_suffix = bool(args.append_suffix)
         reference = args.reference or "auto"
+        want_emg = not args.no_emg
+        want_cop = not args.no_cop
+        want_pose = not args.no_pose
 
-    # -------- Start workers --------
-    w_emg = EMGWorker(emg_mac, cfg.emg_rfcomm_channel, cfg.emg_vmin, cfg.emg_vmax)
-    w_cop = CoPWorker(cfg.cop_gain, cfg.cop_x_dist_cm, cfg.cop_y_dist_cm, cfg.cop_interval_ms)
-    w_pose = PoseWorker(cfg.cam_index, cfg.cam_width, cfg.cam_height, cfg.cam_fps)
+    # Start forgiving (works even if 1-2 devices are offline)
+    started: StartResult = start_workers_forgiving(cfg, want_emg=want_emg, want_cop=want_cop, want_pose=want_pose)
 
-    w_emg.start(); w_cop.start(); w_pose.start()
+    # Log statuses
+    print("[INFO] Device status:")
+    print("  EMG :", "ONLINE" if started.emg else f"OFFLINE ({started.errors.get('emg','')})")
+    print("  CoP :", "ONLINE" if started.cop else f"OFFLINE ({started.errors.get('cop','')})")
+    print("  Pose:", "ONLINE" if started.pose else f"OFFLINE ({started.errors.get('pose','')})")
+
+    if not any((started.emg, started.cop, started.pose)):
+        print("[ERROR] No devices online. Exiting.")
+        return
 
     rec = Recorder()
     t0 = time.time()
@@ -156,10 +174,10 @@ def main():
     print(f"[INFO] Recording for {duration:.2f} s. Press Ctrl+C to stop early.")
     try:
         while time.time() < t_end:
-            emg = get_latest(w_emg.queue, default=None)
-            cop = get_latest(w_cop.queue, default=None)
-            pose = get_latest(w_pose.landmarks_q, default=None)
-            ang  = get_latest(w_pose.angle_q, default=None)
+            emg  = get_latest(started.emg.queue,  default=None) if started.emg else None
+            cop  = get_latest(started.cop.queue,  default=None) if started.cop else None
+            pose = get_latest(started.pose.landmarks_q, default=None) if started.pose else None
+            ang  = get_latest(started.pose.angle_q,     default=None) if started.pose else None
 
             rec.push_emg(emg)
             rec.push_cop(cop)
@@ -170,24 +188,22 @@ def main():
     except KeyboardInterrupt:
         print("\n[INFO] Interrupted by user.")
     finally:
-        for w in (w_emg, w_cop, w_pose):
-            try: w.stop()
-            except: pass
+        stop_workers(started)
 
-    # -------- Decide filename --------
+    # Decide filename
     if not base:
         base = f"session_{auto_suffix(t0)}"
     else:
         if append_suffix:
             base = f"{base}-{auto_suffix(t0)}"
 
-    # -------- Decide save or not --------
+    # Decide save
+    if args.no_save:
+        print("[OK] Skipped saving (no CSV written).")
+        return
     if args.save:
         do_save = True
-    elif args.no_save:
-        do_save = False
     else:
-        # Interactive prompt if in interactive mode, otherwise default yes
         do_save = _input_yes_no("Save merged CSV?", default_yes=True) if interactive else True
 
     if not do_save:
