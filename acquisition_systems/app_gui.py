@@ -1,4 +1,3 @@
-# Tkinter/Matplotlib GUI orchestrator
 # -*- coding: utf-8 -*-
 """
 Tkinter + Matplotlib GUI orchestrating three acquisition workers:
@@ -6,12 +5,21 @@ Tkinter + Matplotlib GUI orchestrating three acquisition workers:
 - Center of Pressure (Phidgets)
 - Pose (MediaPipe)
 
-Also computes and plots joint angle (hip 23–24) and records combined CSV.
+Multi-rate recording: samples are stored at their native rates and merged on save.
 
-Run from project root:
+Run from project root (recommended):
   python -m acquisition_systems.app_gui
+
+You can also run directly:
+  python acquisition_systems/app_gui.py
 """
 
+# Make this runnable both as a module (-m) and as a script
+if __package__ is None or __package__ == "":
+    import os, sys
+    sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
+
+import os
 import tkinter as tk
 import time
 from datetime import datetime
@@ -20,12 +28,33 @@ import numpy as np
 import matplotlib.pyplot as plt
 from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
 
-from .workers.emg import EMGWorker
-from .workers.cop import CoPWorker
-from .workers.pose import PoseWorker
-from .common.utils import get_latest
-from .recorder import Recorder
-from .common.config import load_config
+from acquisition_systems.workers.emg import EMGWorker
+from acquisition_systems.workers.cop import CoPWorker
+from acquisition_systems.workers.pose import PoseWorker
+from acquisition_systems.common.utils import get_latest
+from acquisition_systems.recorder import Recorder
+from acquisition_systems.common.config import load_config
+
+
+# ---------- output directory helpers ----------
+def get_sessions_dir() -> str:
+    """
+    Base directory to store CSVs. Defaults to <project_root>/sessions.
+    Override with env var AS_OUTDIR.
+    """
+    base = os.environ.get("AS_OUTDIR")
+    if base:
+        return base
+    # project root = parent of this file's directory
+    root = os.path.abspath(os.path.join(os.path.dirname(__file__), os.pardir))
+    return os.path.join(root, "sessions")
+
+
+def dated_subdir(base: str) -> str:
+    day = datetime.now().strftime("%Y-%m-%d")
+    path = os.path.join(base, day)
+    os.makedirs(path, exist_ok=True)
+    return path
 
 
 # ---------- simple UI builders ----------
@@ -46,17 +75,52 @@ def create_control_bar(master: tk.Widget, default_mac: str):
     b_save = tk.Button(frame, text="Save CSV")
     b_save.pack(side=tk.LEFT, padx=8)
 
+    b_quit = tk.Button(frame, text="Quit")
+    b_quit.pack(side=tk.LEFT, padx=8)
+
     frame.pack(fill="x", padx=10, pady=6)
-    return e_len, e_mac, e_name, b_start, b_save
+    return e_len, e_mac, e_name, b_start, b_save, b_quit
 
 
-def create_subplots(master: tk.Widget):
+def create_subplots(master: tk.Widget, cam_w: int, cam_h: int):
     fig, ax = plt.subplots(2, 2, figsize=(10, 6))
     fig.tight_layout(rect=[0, 0, 1, 0.98])
     canvas = FigureCanvasTkAgg(fig, master=master)
     canvas.draw()
     canvas.get_tk_widget().pack(side=tk.TOP, fill=tk.BOTH, expand=1)
-    return fig, ax, canvas
+
+    # EMG
+    (emg_line,) = ax[0, 0].plot([], [], lw=1.3)
+    ax[0, 0].set_title("Abdominal EMG (V)")
+    ax[0, 0].set_ylim(0, 5)
+    ax[0, 0].set_xlim(0, 1000)
+    ax[0, 0].grid(True, alpha=0.25)
+
+    # CoP
+    (cop_point,) = ax[0, 1].plot([], [], "o", ms=8)
+    ax[0, 1].set_title("Center of Pressure (cm)")
+    ax[0, 1].set_xlim(-30, 30)
+    ax[0, 1].set_ylim(-22, 22)
+    ax[0, 1].set_aspect("equal", adjustable="box")
+    ax[0, 1].grid(True, alpha=0.3)
+
+    # Landmarks
+    bt_scat = ax[1, 0].scatter([], [], s=12)
+    ax[1, 0].set_title("Body-Tracking Landmarks (px)")
+    ax[1, 0].set_xlim(0, cam_w)
+    ax[1, 0].set_ylim(0, cam_h)
+    ax[1, 0].invert_yaxis()
+    ax[1, 0].set_aspect("equal", adjustable="box")
+    ax[1, 0].grid(True, alpha=0.25)
+
+    # Angle
+    (ang_line,) = ax[1, 1].plot([], [], lw=2)
+    ax[1, 1].set_title("Joint Angle (Pelvic Obliquity 23–24) [deg]")
+    ax[1, 1].set_ylim(-90, 90)
+    ax[1, 1].set_xlim(0, 900)
+    ax[1, 1].grid(True, alpha=0.3)
+
+    return fig, ax, canvas, emg_line, cop_point, bt_scat, ang_line
 
 
 # ---------- application ----------
@@ -67,43 +131,15 @@ class App:
         self.root.title("Acquisition Systems GUI")
 
         # controls
-        self.e_len, self.e_mac, self.e_name, self.b_start, self.b_save = create_control_bar(root, self.cfg.emg_mac)
+        self.e_len, self.e_mac, self.e_name, self.b_start, self.b_save, self.b_quit = create_control_bar(root, self.cfg.emg_mac)
         self.b_start.config(command=self.toggle_start)
         self.b_save.config(command=self.save_csv)
+        self.b_quit.config(command=self.on_close)
 
         # plots
-        self.fig, self.ax, self.canvas = create_subplots(root)
-        # EMG
-        (self.emg_line,) = self.ax[0, 0].plot([], [], lw=1.3)
-        self.ax[0, 0].set_title("Abdominal EMG (V)")
-        self.ax[0, 0].set_ylim(0, 5)
-        self.ax[0, 0].set_xlim(0, 1000)
-        self.ax[0, 0].grid(True, alpha=0.25)
-        self._emg_buf = []  # rolling for plot only
-
-        # CoP
-        (self.cop_point,) = self.ax[0, 1].plot([], [], "o", ms=8)
-        self.ax[0, 1].set_title("Center of Pressure (cm)")
-        self.ax[0, 1].set_xlim(-30, 30)
-        self.ax[0, 1].set_ylim(-22, 22)
-        self.ax[0, 1].set_aspect("equal", adjustable="box")
-        self.ax[0, 1].grid(True, alpha=0.3)
-
-        # Landmarks
-        self.bt_scat = self.ax[1, 0].scatter([], [], s=12)
-        self.ax[1, 0].set_title("Body-Tracking Landmarks (px)")
-        self.ax[1, 0].set_xlim(0, self.cfg.cam_width)
-        self.ax[1, 0].set_ylim(0, self.cfg.cam_height)
-        self.ax[1, 0].invert_yaxis()
-        self.ax[1, 0].set_aspect("equal", adjustable="box")
-        self.ax[1, 0].grid(True, alpha=0.25)
-
-        # Angle
-        (self.ang_line,) = self.ax[1, 1].plot([], [], lw=2)
-        self.ax[1, 1].set_title("Joint Angle (Pelvic Obliquity 23–24) [deg]")
-        self.ax[1, 1].set_ylim(-90, 90)
-        self.ax[1, 1].set_xlim(0, 900)
-        self.ax[1, 1].grid(True, alpha=0.3)
+        (self.fig, self.ax, self.canvas,
+         self.emg_line, self.cop_point, self.bt_scat, self.ang_line) = create_subplots(root, self.cfg.cam_width, self.cfg.cam_height)
+        self._emg_buf = []  # rolling only for plot
         self._ang_x, self._ang_y = [], []
 
         # workers
@@ -170,13 +206,21 @@ class App:
             self.b_start.config(text="Start")
 
     def save_csv(self):
-        name = (self.e_name.get() or "").strip()
-        if not name:
+        # base name (no extension)
+        base = (self.e_name.get() or "").strip()
+        if not base:
             stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
             elapsed = 0 if not self.t_start else int(max(0, time.time() - self.t_start))
-            name = f"session_{stamp}_{elapsed}s"
-        path = self.rec.to_csv(name)
-        print(f"[OK] Saved CSV: {path}")
+            base = f"session_{stamp}_{elapsed}s"
+
+        # sessions/YYYY-MM-DD/base.csv
+        out_dir = dated_subdir(get_sessions_dir())
+        path = self.rec.to_csv_merged(out_dir, base, reference="auto")
+        print(f"[OK] Saved merged CSV: {path}")
+
+        # If you also want per-stream CSVs uncomment:
+        # files = self.rec.to_csv_per_stream(out_dir, base)
+        # print('[OK] Saved per-stream CSVs:', files)
 
     # ----- main loop -----
     def _tick(self):
@@ -184,16 +228,17 @@ class App:
             return
         now = time.time()
         if now >= self.t_stop:
+            # Auto-stop, but do not close the window; user can Save CSV or Quit.
             self.toggle_start()
             return
 
-        # Pull latest samples (or None)
+        # Get latest samples (or None) without blocking
         emg = get_latest(self.w_emg.queue, default=None) if self.w_emg else None
         cop = get_latest(self.w_cop.queue, default=None) if self.w_cop else None
         pose = get_latest(self.w_pose.landmarks_q, default=None) if self.w_pose else None
         ang  = get_latest(self.w_pose.angle_q, default=None) if self.w_pose else None
 
-        # Plot EMG rolling
+        # --- Plot updates ---
         if emg:
             self._emg_buf.append(emg.value)
             self._emg_buf = self._emg_buf[-1000:]
@@ -202,16 +247,13 @@ class App:
             left = max(0, len(self._emg_buf) - 1000)
             self.ax[0, 0].set_xlim(left, left + 1000)
 
-        # Plot CoP point
         if cop:
             self.cop_point.set_data([cop.x], [cop.y])
 
-        # Plot landmarks
         if pose:
             if pose.landmarks is not None and pose.landmarks.size > 0:
                 self.bt_scat.set_offsets(pose.landmarks)
 
-        # Plot angle series
         if ang:
             self._ang_x.append((self._ang_x[-1] + 1) if self._ang_x else 0)
             self._ang_y.append(ang.deg)
@@ -223,9 +265,11 @@ class App:
                 max(900, (self._ang_x[-1] if self._ang_x else 0) + 10)
             )
 
-        # Record one row (forward-fill inside Recorder)
-        rel = now - (self.t_start or now)
-        self.rec.add(rel, emg, cop, pose, ang)
+        # --- Native-rate recording (only push when new sample exists) ---
+        self.rec.push_emg(emg)
+        self.rec.push_cop(cop)
+        self.rec.push_pose(pose)
+        self.rec.push_angle(ang)
 
         self.canvas.draw_idle()
         # schedule next frame (~60 Hz)

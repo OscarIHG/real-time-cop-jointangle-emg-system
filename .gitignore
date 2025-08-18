@@ -1,0 +1,19 @@
+# Python bytecode / caches
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+
+# Virtual envs (opcional)
+.venv/
+venv/
+
+# OS noise (opcional)
+.DS_Store
+
+# Editor/IDE (opcional)
+.vscode/
+.idea/
+
+# Output sessions
+sessions/
