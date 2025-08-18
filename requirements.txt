@@ -1,1 +1,4 @@
+matplotlib>=3.7,<3.10
 mediapipe==0.10.14
+numpy>=1.26,<2.6
+pandas>=2.0,<2.3
