@@ -1,13 +1,12 @@
 # -*- coding: utf-8 -*-
 """
-Pose + USB Camera (V4L2/MJPG) + Matplotlib live plots
-- Uses MediaPipe Pose to get landmarks
-- Plots skeleton (matplotlib) and live shoulder tilt angle over time
-- Opens a small OpenCV preview window (you can hit ESC there)
-- Clean shutdown on ESC / window close / Ctrl+C
-
-Notes:
-- All code comments and printed strings are in English (as requested).
+High-FPS Pose with USB Camera (V4L2) and Matplotlib-only UI
+- Left subplot: 2D landmarks (points only)
+- Right subplot: shoulder tilt angle over time
+- Single window (no OpenCV imshow)
+- Tuned for max FPS on your camera: 320x180 @ 30fps (16:9), model_complexity=0
+- Clean shutdown: Stop button / ESC / 'q' / window close / Ctrl+C (no noisy errors)
+- Orientation: 180° rotation enabled by default (toggle with 'r' if needed)
 """
 
 import os
@@ -16,225 +15,242 @@ import math
 import time
 import signal
 import getpass
+import warnings
 import numpy as np
 import mediapipe as mp
+import matplotlib
 import matplotlib.pyplot as plt
+from matplotlib.widgets import Button
 
-# ---------- Quiet down common desktop warnings (harmless but noisy) ----------
+# ---------- Quieter desktop / library logs ----------
 os.environ.setdefault("NO_AT_BRIDGE", "1")
 os.environ.setdefault("QT_LOGGING_RULES", "*.debug=false")
 os.environ.setdefault("QT_ACCESSIBILITY", "0")
 os.environ.setdefault("SESSION_MANAGER", "")
+os.environ.setdefault("GLOG_minloglevel", "2")
+os.environ.setdefault("TF_CPP_MIN_LOG_LEVEL", "2")
+os.environ.setdefault("MPLBACKEND", "TkAgg")
+warnings.filterwarnings(
+    "ignore",
+    message="SymbolDatabase.GetPrototype\\(\\) is deprecated",
+    category=UserWarning,
+    module="google.protobuf.symbol_database"
+)
 _username = getpass.getuser()
 _xdg = f"/tmp/runtime-{_username}"
 os.environ.setdefault("XDG_RUNTIME_DIR", _xdg)
 os.makedirs(_xdg, mode=0o700, exist_ok=True)
 
-# ---------- Graceful shutdown flag ----------
+# ---------- Tunables for speed/FOV ----------
+CAPTURE_WIDTH, CAPTURE_HEIGHT = 320, 180   # keep 16:9 and very light CPU
+DESIRED_FPS = 30
+PIXEL_FORMAT = 'MJPG'          # try 'MJPG' if your backend prefers it
+PROCESS_WIDTH, PROCESS_HEIGHT = CAPTURE_WIDTH, CAPTURE_HEIGHT
+PRINT_FPS_EVERY = 90           # print loop FPS every N frames
+ANGLE_EVERY_N = 2              # update angle plot every N frames (lighter UI)
+SMOOTH_ANGLE_ALPHA = 0.25      # EMA smoothing (0=off, 0.2~0.3 recommended)
+
+# Orientation defaults (fix upside-down sensor)
+ORIENT_ROT180 = False
+ORIENT_HFLIP = False
+ORIENT_VFLIP = False
+
+# ---------- Graceful shutdown ----------
 running = True
 def _shutdown(*_):
-    """Set the running flag to False on SIGINT/SIGTERM."""
+    """Signal handler / callbacks set this flag to stop the main loop cleanly."""
     global running
     running = False
 
 signal.signal(signal.SIGINT, _shutdown)
 signal.signal(signal.SIGTERM, _shutdown)
 
-# ---------- Pose detector wrapper ----------
+# ---------- Helpers ----------
+def apply_orientation(frame, rot180, hflip, vflip):
+    """Apply orientation transforms before processing and plotting."""
+    if rot180:
+        return cv2.rotate(frame, cv2.ROTATE_180)
+    if hflip:
+        frame = cv2.flip(frame, 1)
+    if vflip:
+        frame = cv2.flip(frame, 0)
+    return frame
+
+def shoulder_tilt_deg(lm, idx_left=11, idx_right=12):
+    """
+    Compute shoulder tilt (deg) with y-axis pointing UP and normalize to [-90, 90].
+    0 ≈ level shoulders; positive when right shoulder is higher.
+    """
+    xL, yL = lm[idx_left, 1], lm[idx_left, 2]
+    xR, yR = lm[idx_right, 1], lm[idx_right, 2]
+    vx = xR - xL
+    vy_img = yR - yL
+    vy = -vy_img  # convert to math-style (y up)
+    ang = math.degrees(math.atan2(vy, vx))  # (-180, 180]
+    if ang > 90:
+        ang -= 180
+    elif ang < -90:
+        ang += 180
+    return ang
+
+# ---------- Pose detector ----------
 class PoseDetector:
-    def __init__(self, static_mode=False, smooth=True, detection_conf=0.5, track_conf=0.5):
-        self.pTime = 0.0
-        self.mpDraw = mp.solutions.drawing_utils
+    def __init__(self, detection_conf=0.5, track_conf=0.5):
         self.mpPose = mp.solutions.pose
         self.pose = self.mpPose.Pose(
-            static_image_mode=static_mode,
-            smooth_landmarks=smooth,
+            static_image_mode=False,
+            model_complexity=0,       # fastest model
+            smooth_landmarks=True,
+            enable_segmentation=False,
             min_detection_confidence=detection_conf,
             min_tracking_confidence=track_conf
         )
         self.results = None
-        self.lmList = []
 
-    def findPose(self, bgr_img, draw=True, draw_on="zeros"):
-        """
-        Process image with MediaPipe Pose.
-        draw_on: "zeros" -> draw landmarks on a black canvas of same size,
-                 "image" -> draw on the original image,
-                 None     -> no drawing.
-        Returns the canvas used for drawing (or a copy of the original).
-        """
+    def process(self, bgr_img):
+        """Run MediaPipe Pose (no drawing for speed)."""
         img_rgb = cv2.cvtColor(bgr_img, cv2.COLOR_BGR2RGB)
         self.results = self.pose.process(img_rgb)
 
-        if draw_on == "zeros":
-            canvas = np.zeros_like(bgr_img)
-            target = canvas
-        elif draw_on == "image":
-            canvas = bgr_img.copy()
-            target = canvas
-        else:
-            # no drawing
-            return bgr_img.copy()
-
-        if self.results.pose_landmarks and draw:
-            self.mpDraw.draw_landmarks(
-                target,
-                self.results.pose_landmarks,
-                self.mpPose.POSE_CONNECTIONS
-            )
-        return canvas
-
-    def getPosition(self, reference_img_shape):
-        """
-        Build a landmark list (id, x_px, y_px) for current results.
-        reference_img_shape: tuple (H, W, C) to convert normalized coords to pixels.
-        """
-        self.lmList = []
+    def landmarks_px(self, shape):
+        """Return landmarks as (N,3): [id, x_px, y_px]."""
         if not self.results or not self.results.pose_landmarks:
             return np.empty((0, 3), dtype=int)
-
-        h, w = reference_img_shape[:2]
+        h, w = shape[:2]
+        pts = []
         for idx, lm in enumerate(self.results.pose_landmarks.landmark):
             cx, cy = int(lm.x * w), int(lm.y * h)
-            self.lmList.append([idx, cx, cy])
-        return np.array(self.lmList, dtype=int)
-
-    def showFps(self, img_to_draw_on):
-        """Compute and print FPS, also overlay text on provided image (numpy array)."""
-        cTime = time.time()
-        fps = 1.0 / max(1e-6, (cTime - self.pTime))
-        self.pTime = cTime
-        print(f"FPS: {fps:.2f}")
-        cv2.putText(img_to_draw_on, str(int(fps)), (70, 80),
-                    cv2.FONT_HERSHEY_PLAIN, 3, (255, 0, 0), 3)
+            pts.append([idx, cx, cy])
+        return np.array(pts, dtype=int)
 
 # ---------- Main ----------
 def main():
-    # --- Camera init (V4L2 + MJPG to reduce CPU on RPi) ---
+    # --- Camera init (V4L2) ---
     cam = cv2.VideoCapture(0, cv2.CAP_V4L2)
-    cam.set(cv2.CAP_PROP_FRAME_WIDTH, 1280)
-    cam.set(cv2.CAP_PROP_FRAME_HEIGHT, 720)
-    cam.set(cv2.CAP_PROP_FPS, 30)
-    cam.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*'MJPG'))
-
+    cam.set(cv2.CAP_PROP_FRAME_WIDTH, CAPTURE_WIDTH)
+    cam.set(cv2.CAP_PROP_FRAME_HEIGHT, CAPTURE_HEIGHT)
+    cam.set(cv2.CAP_PROP_FPS, DESIRED_FPS)
+    cam.set(cv2.CAP_PROP_BUFFERSIZE, 1)  # lower latency if supported
+    cam.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*PIXEL_FORMAT))
     if not cam.isOpened():
         print("[ERROR] Could not open /dev/video0")
         return
 
-    cv2.namedWindow("USB Camera (press ESC to exit)", cv2.WINDOW_AUTOSIZE)
-    print("[INFO] Press ESC, close the window, or Ctrl+C to exit.")
+    detector = PoseDetector(detection_conf=0.5, track_conf=0.5)
 
-    # --- Pose detector ---
-    detector = PoseDetector(static_mode=False, smooth=True, detection_conf=0.5, track_conf=0.5)
-
-    # --- Matplotlib setup (skeleton + shoulder tilt angle) ---
+    # --- Matplotlib UI (single window with 2 subplots + Stop button) ---
     plt.ion()
-    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(12, 6))
-    ax1.set_title("Skeleton (2D)")
-    ax2.set_title("Left–Right shoulder tilt (deg)")
+    fig, (ax_pts, ax_ang) = plt.subplots(1, 2, figsize=(12, 6))
+    try:
+        fig.canvas.manager.set_window_title("Pose (points)  |  Shoulder Tilt")
+    except Exception:
+        pass
+    plt.subplots_adjust(bottom=0.14, right=0.98)  # space for Stop button
+
+    # Left: points only
+    ax_pts.set_title("2D landmarks (points only)")
+    ax_pts.set_xlim(0, PROCESS_WIDTH)
+    ax_pts.set_ylim(0, PROCESS_HEIGHT)
+    ax_pts.invert_yaxis()   # image-like coordinates (origin top-left)
+    ax_pts.set_aspect('equal')
+    ax_pts.grid(True, alpha=0.25)
+    scat = ax_pts.scatter([], [], s=12, c='r')
+
+    # Right: shoulder angle
+    ax_ang.set_title("Left–Right shoulder tilt (deg)")
+    ax_ang.set_xlim(0, 900)
+    ax_ang.set_ylim(-90, 90)
+    ax_ang.grid(True, alpha=0.3)
+    line_angle, = ax_ang.plot([], [], linewidth=2)
+
+    # --- Stop button ---
+    btn_ax = fig.add_axes([0.86, 0.02, 0.10, 0.07])  # [left, bottom, width, height]
+    stop_btn = Button(btn_ax, "Stop")
+    stop_btn.label.set_fontsize(11)
+    stop_btn.color = "#e74c3c"
+    stop_btn.hovercolor = "#c0392b"
+    def on_stop(_event):
+        _shutdown()
+    stop_btn.on_clicked(on_stop)
+
+    # Keyboard: ESC/q to exit, 'r' toggles 180° rotation
+    def on_key(event):
+        k = (event.key or "").lower()
+        if k in ("escape", "q"):
+            _shutdown()
+        elif k == "r":
+            # toggle 180° rotation at runtime
+            global ORIENT_ROT180
+            ORIENT_ROT180 = not ORIENT_ROT180
+            print(f"[INFO] Rotate 180° = {ORIENT_ROT180}")
+
+    def on_close(_event):
+        _shutdown()
+
+    fig.canvas.mpl_connect('key_press_event', on_key)
+    fig.canvas.mpl_connect('close_event', on_close)
+
+    # Loop state
+    L_SHO, R_SHO = 11, 12
     xs, ys = [], []
+    angle_smooth = None
     t = 0
-
-    # We will adjust axis limits dynamically after first frame to match processed size.
-    skel_initialized = False
-    line_angle, = ax2.plot([], [], 'b', linewidth=2)
-
-    # Mediapipe landmark indices:
-    # 11 = left shoulder, 12 = right shoulder
-    L_SHO = 11
-    R_SHO = 12
+    last_fps_t = time.perf_counter()
 
     try:
         while running:
-            ok, frame = cam.read()
+            try:
+                ok, frame = cam.read()
+            except KeyboardInterrupt:
+                _shutdown()
+                break
             if not ok:
-                print("[ERROR] Failed to capture frame.")
+                if running:
+                    print("[ERROR] Failed to capture frame.")
                 break
 
-            # Optional: downscale to 640x480 for faster CPU on RPi and consistent plotting
-            proc = cv2.resize(frame, (640, 480), interpolation=cv2.INTER_LINEAR)
+            # Ensure processing size and orientation
+            if (frame.shape[1], frame.shape[0]) != (PROCESS_WIDTH, PROCESS_HEIGHT):
+                frame = cv2.resize(frame, (PROCESS_WIDTH, PROCESS_HEIGHT), interpolation=cv2.INTER_LINEAR)
+            frame = apply_orientation(frame, ORIENT_ROT180, ORIENT_HFLIP, ORIENT_VFLIP)
 
-            # Run pose and draw landmarks on a black canvas for matplotlib,
-            # and also overlay on the OpenCV preview for convenience.
-            canvas = detector.findPose(proc, draw=True, draw_on="zeros")
-            preview = detector.findPose(proc, draw=True, draw_on="image")  # for cv2.imshow
+            # MediaPipe (no drawing)
+            detector.process(frame)
+            lm = detector.landmarks_px(frame.shape)
 
-            # Build landmark pixel array (id, x, y) based on processed image shape
-            lm = detector.getPosition(proc.shape)
+            # Update points
+            if lm.shape[0] > 0:
+                scat.set_offsets(lm[:, 1:3])
+            else:
+                scat.set_offsets(np.empty((0, 2)))
 
-            # Show FPS on the OpenCV preview
-            detector.showFps(preview)
-            cv2.imshow("USB Camera (press ESC to exit)", preview)
-
-            # Exit conditions from OpenCV side
-            key = cv2.waitKey(1) & 0xFF
-            if key == 27 or cv2.getWindowProperty("USB Camera (press ESC to exit)", cv2.WND_PROP_VISIBLE) < 1:
-                break
-
-            # Plot skeleton and angle only if we have enough landmarks
-            if lm.shape[0] >= 13:  # shoulders exist
-                # Prepare matplotlib axes once (match the processed frame size)
-                if not skel_initialized:
-                    h, w = proc.shape[:2]
-                    ax1.set_xlim(0, w)
-                    ax1.set_ylim(0, h)
-                    ax1.invert_yaxis()  # so origin (0,0) is top-left like image coordinates
-                    ax1.set_aspect('equal')
-                    ax2.set_xlim(0, 1000)  # will autoscale later; start with a window
-                    ax2.set_ylim(-90, 90)
-                    skel_initialized = True
-
-                # Scatter the keypoints
-                ax1.clear()
-                ax1.set_title("Skeleton (2D)")
-                ax1.set_xlim(0, w); ax1.set_ylim(0, h); ax1.invert_yaxis(); ax1.set_aspect('equal')
-                ax1.grid(True, alpha=0.3)
-
-                X = lm[:, 1]
-                Y = lm[:, 2]
-                ax1.plot(X, Y, 'ro', markersize=4)
-
-                # Simple connections similar to POSE_CONNECTIONS (subset)
-                # You can expand these as needed.
-                def _pl(idx_list):
-                    ax1.plot(X[idx_list], Y[idx_list], 'b')
-
-                # Torso & arms & legs (roughly following your original choices)
-                if lm.shape[0] > 32:  # ensure all indices exist before plotting segments
-                    _pl([11, 12, 24, 23, 11])                           # shoulders-hips box
-                    _pl([11, 13, 15, 17, 15, 13, 11])                    # left arm + hand loop
-                    _pl([12, 14, 16, 18, 16, 14, 12])                    # right arm + hand loop
-                    _pl([23, 25, 27, 29, 31, 27])                        # left leg
-                    _pl([24, 26, 28, 30, 32, 28])                        # right leg
-                    _pl([11, 12])                                        # shoulders
-                    _pl([23, 24])                                        # hips
-
-                # Shoulder tilt angle (deg): atan2(yL - yR, xL - xR)
-                xL, yL = lm[L_SHO, 1], lm[L_SHO, 2]
-                xR, yR = lm[R_SHO, 1], lm[R_SHO, 2]
-                angle_deg = math.degrees(math.atan2((yL - yR), (xL - xR)))
-
-                t += 1
-                xs.append(t)
-                ys.append(angle_deg)
+            # Update angle plot every N frames
+            if lm.shape[0] > R_SHO and (t % ANGLE_EVERY_N == 0):
+                ang = shoulder_tilt_deg(lm, L_SHO, R_SHO)
+                if 0.0 < SMOOTH_ANGLE_ALPHA < 1.0:
+                    angle_smooth = ang if angle_smooth is None else \
+                        (1 - SMOOTH_ANGLE_ALPHA) * angle_smooth + SMOOTH_ANGLE_ALPHA * ang
+                    ang_plot = angle_smooth
+                else:
+                    ang_plot = ang
+                xs.append(t); ys.append(ang_plot)
+                if len(xs) > 900:
+                    xs = xs[-900:]; ys = ys[-900:]
                 line_angle.set_data(xs, ys)
+                ax_ang.relim(); ax_ang.autoscale_view(scalex=True, scaley=False)
 
-                # Keep last ~1000 samples visible
-                if len(xs) > 1000:
-                    xs = xs[-1000:]
-                    ys = ys[-1000:]
-                    line_angle.set_data(xs, ys)
+            # FPS print (amortized)
+            if t and (t % PRINT_FPS_EVERY == 0):
+                now = time.perf_counter()
+                fps = PRINT_FPS_EVERY / max(1e-6, (now - last_fps_t))
+                print(f"FPS (loop): {fps:.2f} | fmt={PIXEL_FORMAT} {CAPTURE_WIDTH}x{CAPTURE_HEIGHT} | rot180={ORIENT_ROT180}")
+                last_fps_t = now
 
-                ax2.relim()
-                ax2.autoscale_view()
-
-                # Refresh figure
-                plt.pause(0.001)
+            t += 1
+            plt.pause(0.001)  # process GUI events and refresh artists
 
     finally:
-        # Always release resources (even on Ctrl+C/SIGTERM)
         cam.release()
-        cv2.destroyAllWindows()
         plt.ioff()
         try:
             plt.close(fig)
