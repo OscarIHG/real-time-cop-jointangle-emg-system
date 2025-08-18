@@ -1,13 +1,13 @@
 # -*- coding: utf-8 -*-
 """
-Tkinter + Matplotlib GUI orchestrating three acquisition workers:
-- EMG (Bluetooth)
-- Center of Pressure (Phidgets)
-- Pose (MediaPipe)
+Tkinter + Matplotlib GUI orchestrating three acquisition workers (EMG, CoP, Pose)
+with graceful degradation if some devices are offline.
 
-Multi-rate recording: samples are stored at their native rates and merged on save.
+- Status bar shows ONLINE/OFFLINE per device (EMG/CoP/Pose).
+- Multi-rate recording; merged CSV with selectable reference stream.
+- "Append auto suffix" option akin to headless.
 
-Run from project root (recommended):
+Run (recommended from project root):
   python -m acquisition_systems.app_gui
 
 You can also run directly:
@@ -24,17 +24,16 @@ import tkinter as tk
 from tkinter import ttk
 import time
 from datetime import datetime
+from typing import Optional
 
 import numpy as np
 import matplotlib.pyplot as plt
 from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
 
-from acquisition_systems.workers.emg import EMGWorker
-from acquisition_systems.workers.cop import CoPWorker
-from acquisition_systems.workers.pose import PoseWorker
+from acquisition_systems.common.config import load_config
+from acquisition_systems.common.runtime import start_workers_forgiving, stop_workers, StartResult
 from acquisition_systems.common.utils import get_latest
 from acquisition_systems.recorder import Recorder
-from acquisition_systems.common.config import load_config
 
 
 # ---------- output directory helpers ----------
@@ -58,7 +57,7 @@ def dated_subdir(base: str) -> str:
     return path
 
 
-# ---------- simple UI builders ----------
+# ---------- UI builders ----------
 def create_control_bar(master: tk.Widget, default_mac: str):
     frame = tk.Frame(master)
 
@@ -80,7 +79,7 @@ def create_control_bar(master: tk.Widget, default_mac: str):
     e_name.insert(0, "")
     e_name.pack(side=tk.LEFT)
 
-    # Append suffix checkbox
+    # Append suffix
     append_var = tk.BooleanVar(value=False)
     cb_append = tk.Checkbutton(frame, text="Append auto suffix", variable=append_var)
     cb_append.pack(side=tk.LEFT, padx=8)
@@ -109,6 +108,17 @@ def create_control_bar(master: tk.Widget, default_mac: str):
 
     frame.pack(fill="x", padx=10, pady=6)
     return e_len, e_mac, e_name, append_var, ref_var, b_start, b_save, b_quit
+
+
+def create_status_bar(master: tk.Widget):
+    frame = tk.Frame(master)
+    emg = tk.Label(frame, text="EMG: —", fg="gray")
+    cop = tk.Label(frame, text="CoP: —", fg="gray")
+    pose = tk.Label(frame, text="Pose: —", fg="gray")
+    for w in (emg, cop, pose):
+        w.pack(side=tk.LEFT, padx=12)
+    frame.pack(fill="x", padx=10, pady=(0, 6))
+    return frame, emg, cop, pose
 
 
 def create_subplots(master: tk.Widget, cam_w: int, cam_h: int):
@@ -152,39 +162,59 @@ def create_subplots(master: tk.Widget, cam_w: int, cam_h: int):
     return fig, ax, canvas, emg_line, cop_point, bt_scat, ang_line
 
 
-# ---------- application ----------
+# ---------- App ----------
 class App:
     def __init__(self, root: tk.Tk):
         self.root = root
         self.cfg = load_config()
         self.root.title("Acquisition Systems GUI")
 
-        # controls (now includes append_var and ref_var)
-        (self.e_len, self.e_mac, self.e_name, self.append_var, self.ref_var,
-         self.b_start, self.b_save, self.b_quit) = create_control_bar(root, self.cfg.emg_mac)
-
+        # Controls
+        (
+            self.e_len,
+            self.e_mac,
+            self.e_name,
+            self.append_var,
+            self.ref_var,
+            self.b_start,
+            self.b_save,
+            self.b_quit,
+        ) = create_control_bar(root, self.cfg.emg_mac)
         self.b_start.config(command=self.toggle_start)
         self.b_save.config(command=self.save_csv)
         self.b_quit.config(command=self.on_close)
 
-        # plots
-        (self.fig, self.ax, self.canvas,
-         self.emg_line, self.cop_point, self.bt_scat, self.ang_line) = create_subplots(root, self.cfg.cam_width, self.cfg.cam_height)
+        # Status bar
+        self.status_frame, self.lbl_emg, self.lbl_cop, self.lbl_pose = create_status_bar(root)
+
+        # Plots
+        (
+            self.fig,
+            self.ax,
+            self.canvas,
+            self.emg_line,
+            self.cop_point,
+            self.bt_scat,
+            self.ang_line,
+        ) = create_subplots(root, self.cfg.cam_width, self.cfg.cam_height)
         self._emg_buf = []  # rolling only for plot
         self._ang_x, self._ang_y = [], []
 
-        # workers
-        self.w_emg = None
-        self.w_cop = None
-        self.w_pose = None
-
-        # recorder
+        # Recorder
         self.rec = Recorder()
 
-        # runtime
+        # Workers bundle (StartResult)
+        self.started: Optional[StartResult] = None
+
+        # Runtime
         self.running = False
         self.t_start = None
         self.t_stop = 0.0
+
+        # Last data timestamps for dynamic ONLINE/OFFLINE
+        self._last_emg = None
+        self._last_cop = None
+        self._last_pose = None
 
         self.root.protocol("WM_DELETE_WINDOW", self.on_close)
 
@@ -194,65 +224,117 @@ class App:
         elapsed = 0 if not self.t_start else int(max(0, time.time() - self.t_start))
         return f"{stamp}_{elapsed}s"
 
+    def _set_status(self, label: tk.Label, name: str, online: bool, msg: str = ""):
+        if online:
+            label.config(text=f"{name}: ONLINE", fg="green")
+        else:
+            label.config(text=f"{name}: OFFLINE{(' — ' + msg) if msg else ''}", fg="red")
+
+    def _refresh_status_labels(self):
+        if self.started is None:
+            for lbl, name in ((self.lbl_emg, "EMG"), (self.lbl_cop, "CoP"), (self.lbl_pose, "Pose")):
+                lbl.config(text=f"{name}: —", fg="gray")
+            return
+        self._set_status(
+            self.lbl_emg, "EMG", self.started.emg is not None, self.started.errors.get("emg", "")
+        )
+        self._set_status(
+            self.lbl_cop, "CoP", self.started.cop is not None, self.started.errors.get("cop", "")
+        )
+        self._set_status(
+            self.lbl_pose, "Pose", self.started.pose is not None, self.started.errors.get("pose", "")
+        )
+
+    def _update_dynamic_status(self, now: float, threshold: float = 2.0):
+        """Mark device OFFLINE if no data received within 'threshold' seconds."""
+        if not self.started:
+            return
+        # EMG
+        emg_online = (
+            self.started.emg is not None
+            and self._last_emg is not None
+            and (now - self._last_emg) < threshold
+        )
+        emg_msg = "" if self.started.emg else self.started.errors.get("emg", "")
+        if self.started.emg and not emg_online:
+            emg_msg = "no data"
+        self._set_status(self.lbl_emg, "EMG", emg_online if self.started.emg else False, emg_msg)
+
+        # CoP
+        cop_online = (
+            self.started.cop is not None
+            and self._last_cop is not None
+            and (now - self._last_cop) < threshold
+        )
+        cop_msg = "" if self.started.cop else self.started.errors.get("cop", "")
+        if self.started.cop and not cop_online:
+            cop_msg = "no data"
+        self._set_status(self.lbl_cop, "CoP", cop_online if self.started.cop else False, cop_msg)
+
+        # Pose
+        pose_online = (
+            self.started.pose is not None
+            and self._last_pose is not None
+            and (now - self._last_pose) < threshold
+        )
+        pose_msg = "" if self.started.pose else self.started.errors.get("pose", "")
+        if self.started.pose and not pose_online:
+            pose_msg = "no data"
+        self._set_status(self.lbl_pose, "Pose", pose_online if self.started.pose else False, pose_msg)
+
     # ----- UI actions -----
     def toggle_start(self):
         if not self.running:
+            # duration
             try:
                 dur = float(self.e_len.get() or "20")
             except Exception:
                 dur = 20.0
             dur = max(1.0, dur)
 
+            # EMG MAC override
             mac = (self.e_mac.get() or "").strip() or self.cfg.emg_mac
 
-            # start workers
-            self.w_emg = EMGWorker(
-                mac_address=mac,
-                rfcomm_channel=self.cfg.emg_rfcomm_channel,
-                clamp_min=self.cfg.emg_vmin,
-                clamp_max=self.cfg.emg_vmax,
-            )
-            self.w_emg.start()
+            # load cfg copy with overridden MAC
+            cfg = load_config()
+            cfg.emg_mac = mac
 
-            self.w_cop = CoPWorker(
-                gain=self.cfg.cop_gain,
-                x_dist_cm=self.cfg.cop_x_dist_cm,
-                y_dist_cm=self.cfg.cop_y_dist_cm,
-                data_interval_ms=self.cfg.cop_interval_ms,
-            )
-            self.w_cop.start()
+            # Start forgiving (works even if 1-2 devices are offline)
+            self.started = start_workers_forgiving(cfg, want_emg=True, want_cop=True, want_pose=True)
 
-            self.w_pose = PoseWorker(
-                cam_index=self.cfg.cam_index,
-                width=self.cfg.cam_width,
-                height=self.cfg.cam_height,
-                fps=self.cfg.cam_fps,
-            )
-            self.w_pose.start()
+            # If nothing started, show status and bail
+            if not any((self.started.emg, self.started.cop, self.started.pose)):
+                self._refresh_status_labels()
+                print("[WARN] No devices online. Nothing to run.")
+                return
 
             # reset plot buffers and timer
             self._emg_buf.clear()
-            self._ang_x.clear(); self._ang_y.clear()
+            self._ang_x.clear()
+            self._ang_y.clear()
             self.t_start = time.time()
             self.t_stop = self.t_start + dur
             self.running = True
             self.b_start.config(text="Stop")
+
+            # update status bar
+            self._refresh_status_labels()
+
+            # loop
             self._tick()
         else:
             self._stop_all()
             self.b_start.config(text="Start")
+            self._refresh_status_labels()
 
     def save_csv(self):
-        # Base name typed by user (could be empty)
         base = (self.e_name.get() or "").strip()
         append = bool(self.append_var.get())
         ref = (self.ref_var.get() or "auto").lower()
 
         if not base:
-            # No name typed -> always auto name
             base = f"session_{self._auto_suffix()}"
         else:
-            # Name typed -> append suffix only if checkbox is ON
             if append:
                 base = f"{base}-{self._auto_suffix()}"
 
@@ -262,21 +344,22 @@ class App:
 
     # ----- main loop -----
     def _tick(self):
-        if not self.running:
+        if not self.running or self.started is None:
             return
         now = time.time()
         if now >= self.t_stop:
-            # Auto-stop; user can Save CSV or Quit.
-            self.toggle_start()
+            self.toggle_start()  # stop
             return
 
-        # Get latest samples (or None) without blocking
-        emg = get_latest(self.w_emg.queue, default=None) if self.w_emg else None
-        cop = get_latest(self.w_cop.queue, default=None) if self.w_cop else None
-        pose = get_latest(self.w_pose.landmarks_q, default=None) if self.w_pose else None
-        ang  = get_latest(self.w_pose.angle_q, default=None) if self.w_pose else None
+        # Get latest samples (or None) without blocking from whichever workers are online
+        emg = get_latest(self.started.emg.queue, default=None) if self.started.emg else None
+        cop = get_latest(self.started.cop.queue, default=None) if self.started.cop else None
+        pose = (
+            get_latest(self.started.pose.landmarks_q, default=None) if self.started.pose else None
+        )
+        ang = get_latest(self.started.pose.angle_q, default=None) if self.started.pose else None
 
-        # --- Plot updates ---
+        # Plot
         if emg:
             self._emg_buf.append(emg.value)
             self._emg_buf = self._emg_buf[-1000:]
@@ -300,34 +383,34 @@ class App:
             self.ang_line.set_data(self._ang_x, self._ang_y)
             self.ax[1, 1].set_xlim(
                 max(0, (self._ang_x[-1] if self._ang_x else 0) - 900),
-                max(900, (self._ang_x[-1] if self._ang_x else 0) + 10)
+                max(900, (self._ang_x[-1] if self._ang_x else 0) + 10),
             )
 
-        # --- Native-rate recording (only push when new sample exists) ---
+        # Native-rate recording
         self.rec.push_emg(emg)
         self.rec.push_cop(cop)
         self.rec.push_pose(pose)
         self.rec.push_angle(ang)
 
+        # Update last-sample timestamps
+        if emg:
+            self._last_emg = now
+        if cop:
+            self._last_cop = now
+        if pose:
+            self._last_pose = now
+
         self.canvas.draw_idle()
+        # Refresh dynamic status (detect devices that stopped sending)
+        self._update_dynamic_status(now)
         # schedule next frame (~60 Hz)
         self.root.after(16, self._tick)
 
     def _stop_all(self):
+        if self.started:
+            stop_workers(self.started)
         self.running = False
-        try:
-            if self.w_emg: self.w_emg.stop()
-        except Exception:
-            pass
-        try:
-            if self.w_cop: self.w_cop.stop()
-        except Exception:
-            pass
-        try:
-            if self.w_pose: self.w_pose.stop()
-        except Exception:
-            pass
-        self.w_emg = self.w_cop = self.w_pose = None
+        self.started = None
 
     def on_close(self):
         self._stop_all()
