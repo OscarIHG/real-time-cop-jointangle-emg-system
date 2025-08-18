@@ -21,6 +21,7 @@ if __package__ is None or __package__ == "":
 
 import os
 import tkinter as tk
+from tkinter import ttk
 import time
 from datetime import datetime
 
@@ -60,15 +61,43 @@ def dated_subdir(base: str) -> str:
 # ---------- simple UI builders ----------
 def create_control_bar(master: tk.Widget, default_mac: str):
     frame = tk.Frame(master)
+
+    # Duration
     tk.Label(frame, text="Duration (s):").pack(side=tk.LEFT, padx=5)
-    e_len = tk.Entry(frame, width=6); e_len.insert(0, "20"); e_len.pack(side=tk.LEFT)
+    e_len = tk.Entry(frame, width=6)
+    e_len.insert(0, "20")
+    e_len.pack(side=tk.LEFT)
 
+    # EMG MAC
     tk.Label(frame, text="EMG MAC:").pack(side=tk.LEFT, padx=(20, 5))
-    e_mac = tk.Entry(frame, width=17); e_mac.insert(0, default_mac); e_mac.pack(side=tk.LEFT)
+    e_mac = tk.Entry(frame, width=17)
+    e_mac.insert(0, default_mac)
+    e_mac.pack(side=tk.LEFT)
 
+    # Filename
     tk.Label(frame, text="Filename:").pack(side=tk.LEFT, padx=(20, 5))
-    e_name = tk.Entry(frame, width=22); e_name.insert(0, ""); e_name.pack(side=tk.LEFT)
+    e_name = tk.Entry(frame, width=22)
+    e_name.insert(0, "")
+    e_name.pack(side=tk.LEFT)
 
+    # Append suffix checkbox
+    append_var = tk.BooleanVar(value=False)
+    cb_append = tk.Checkbutton(frame, text="Append auto suffix", variable=append_var)
+    cb_append.pack(side=tk.LEFT, padx=8)
+
+    # Reference selector
+    tk.Label(frame, text="Reference:").pack(side=tk.LEFT, padx=(20, 5))
+    ref_var = tk.StringVar(value="auto")
+    ref_combo = ttk.Combobox(
+        frame,
+        textvariable=ref_var,
+        values=("auto", "emg", "cop", "pose", "angle"),
+        width=7,
+        state="readonly",
+    )
+    ref_combo.pack(side=tk.LEFT)
+
+    # Buttons
     b_start = tk.Button(frame, text="Start")
     b_start.pack(side=tk.LEFT, padx=8)
 
@@ -79,7 +108,7 @@ def create_control_bar(master: tk.Widget, default_mac: str):
     b_quit.pack(side=tk.LEFT, padx=8)
 
     frame.pack(fill="x", padx=10, pady=6)
-    return e_len, e_mac, e_name, b_start, b_save, b_quit
+    return e_len, e_mac, e_name, append_var, ref_var, b_start, b_save, b_quit
 
 
 def create_subplots(master: tk.Widget, cam_w: int, cam_h: int):
@@ -130,8 +159,10 @@ class App:
         self.cfg = load_config()
         self.root.title("Acquisition Systems GUI")
 
-        # controls
-        self.e_len, self.e_mac, self.e_name, self.b_start, self.b_save, self.b_quit = create_control_bar(root, self.cfg.emg_mac)
+        # controls (now includes append_var and ref_var)
+        (self.e_len, self.e_mac, self.e_name, self.append_var, self.ref_var,
+         self.b_start, self.b_save, self.b_quit) = create_control_bar(root, self.cfg.emg_mac)
+
         self.b_start.config(command=self.toggle_start)
         self.b_save.config(command=self.save_csv)
         self.b_quit.config(command=self.on_close)
@@ -156,6 +187,12 @@ class App:
         self.t_stop = 0.0
 
         self.root.protocol("WM_DELETE_WINDOW", self.on_close)
+
+    # ----- helpers -----
+    def _auto_suffix(self) -> str:
+        stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+        elapsed = 0 if not self.t_start else int(max(0, time.time() - self.t_start))
+        return f"{stamp}_{elapsed}s"
 
     # ----- UI actions -----
     def toggle_start(self):
@@ -206,21 +243,22 @@ class App:
             self.b_start.config(text="Start")
 
     def save_csv(self):
-        # base name (no extension)
+        # Base name typed by user (could be empty)
         base = (self.e_name.get() or "").strip()
+        append = bool(self.append_var.get())
+        ref = (self.ref_var.get() or "auto").lower()
+
         if not base:
-            stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
-            elapsed = 0 if not self.t_start else int(max(0, time.time() - self.t_start))
-            base = f"session_{stamp}_{elapsed}s"
+            # No name typed -> always auto name
+            base = f"session_{self._auto_suffix()}"
+        else:
+            # Name typed -> append suffix only if checkbox is ON
+            if append:
+                base = f"{base}-{self._auto_suffix()}"
 
-        # sessions/YYYY-MM-DD/base.csv
         out_dir = dated_subdir(get_sessions_dir())
-        path = self.rec.to_csv_merged(out_dir, base, reference="auto")
+        path = self.rec.to_csv_merged(out_dir, base, reference=ref)
         print(f"[OK] Saved merged CSV: {path}")
-
-        # If you also want per-stream CSVs uncomment:
-        # files = self.rec.to_csv_per_stream(out_dir, base)
-        # print('[OK] Saved per-stream CSVs:', files)
 
     # ----- main loop -----
     def _tick(self):
@@ -228,7 +266,7 @@ class App:
             return
         now = time.time()
         if now >= self.t_stop:
-            # Auto-stop, but do not close the window; user can Save CSV or Quit.
+            # Auto-stop; user can Save CSV or Quit.
             self.toggle_start()
             return
 
