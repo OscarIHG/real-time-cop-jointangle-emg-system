@@ -110,53 +110,57 @@ def create_status_bar(master: tk.Widget):
 
 
 def create_subplots(master: tk.Widget, cam_w: int, cam_h: int):
-    fig, ax = plt.subplots(2, 2, figsize=(10, 6))
-    fig.tight_layout(rect=[0, 0, 1, 0.98])
+    # Usa constrained_layout para evitar que se encimen títulos/etiquetas entre subplots
+    fig, ax = plt.subplots(2, 2, figsize=(10, 6), constrained_layout=True)
     canvas = FigureCanvasTkAgg(fig, master=master)
     canvas.draw()
     canvas.get_tk_widget().pack(side=tk.TOP, fill=tk.BOTH, expand=1)
 
-    # EMG
+    # --- EMG ---
     (emg_line,) = ax[0, 0].plot([], [], lw=1.3)
-    ax[0, 0].set_title("Abdominal EMG (V)")
-    ax[0, 0].set_ylabel("EMG [V]")
-    ax[0, 0].set_ylim(0, 5)                      # start at [0..5]; dynamic ylim will keep ymin>=0
-    ax[0, 0].set_xlim(0, EMG_PLOT_WINDOW)        # visible window = 200 samples
-    ax[0, 0].margins(x=0, y=0)                   # no extra padding
+    ax[0, 0].set_title("Abdominal EMG")     # <- sin "(V)"
+    ax[0, 0].set_ylabel("EMG")              # <- sin unidades para evitar confusiones
+    ax[0, 0].set_ylim(0, 5)                 # el auto-ylim ya respeta ymin>=0 en _tick()
+    ax[0, 0].set_xlim(0, EMG_PLOT_WINDOW)   # ventana visible
+    ax[0, 0].margins(x=0, y=0)
     ax[0, 0].grid(True, alpha=0.25)
 
-    # CoP (force plate) with real dimensions
+    # --- CoP (force plate) con dimensiones reales ---
     (cop_point,) = ax[0, 1].plot([], [], "o", ms=8)
     ax[0, 1].set_title("Center of Pressure [cm]")
-    ax[0, 1].set_xlabel("X [cm]"); ax[0, 1].set_ylabel("Y [cm]")
+    ax[0, 1].set_xlabel("X [cm]")
+    ax[0, 1].set_ylabel("Y [cm]")
     ax[0, 1].set_xlim(-COP_X_HALF_RANGE_CM, COP_X_HALF_RANGE_CM)  # ±27.92
     ax[0, 1].set_ylim(-COP_Y_HALF_RANGE_CM, COP_Y_HALF_RANGE_CM)  # ±20.32
     ax[0, 1].set_aspect("equal", adjustable="box")
     ax[0, 1].margins(x=0, y=0)
     ax[0, 1].grid(True, alpha=0.3)
+    # Asegura que no haya leyenda (por si en algún momento se le agregó un label)
+    if getattr(ax[0, 1], "legend_", None) is not None:
+        ax[0, 1].legend_.remove()
 
-    # Body tracking (px)
+    # --- Body tracking (px) con 0 en la esquina INFERIOR izquierda ---
     bt_scat = ax[1, 0].scatter([], [], s=12)
     ax[1, 0].set_title("Body-Tracking Landmarks [px]")
-    ax[1, 0].set_xlabel("x [px]"); ax[1, 0].set_ylabel("y [px]")
+    ax[1, 0].set_xlabel("x [px]")
+    ax[1, 0].set_ylabel("y [px]")
     ax[1, 0].set_xlim(0, cam_w)
-    ax[1, 0].set_ylim(0, cam_h)
-    ax[1, 0].invert_yaxis()  # origin at top-left, typical image coords
+    ax[1, 0].set_ylim(0, cam_h)    # <- SIN invert_yaxis(): 0 queda abajo a la izquierda
+    # ax[1, 0].invert_yaxis()      # (eliminado para que 0 esté abajo)
     ax[1, 0].set_aspect("equal", adjustable="box")
     ax[1, 0].margins(x=0, y=0)
     ax[1, 0].grid(True, alpha=0.25)
 
-    # Joint angle with 50-sample scrolling window
+    # --- Joint angle (scroll de 50 muestras) ---
     (ang_line,) = ax[1, 1].plot([], [], lw=2)
     ax[1, 1].set_title("Joint Angle (Pelvic Obliquity 23–24) [deg]")
     ax[1, 1].set_ylabel("Angle [deg]")
     ax[1, 1].set_ylim(-90, 90)
-    ax[1, 1].set_xlim(0, ANGLE_PLOT_WINDOW)      # visible window = 50 samples
+    ax[1, 1].set_xlim(0, ANGLE_PLOT_WINDOW)
     ax[1, 1].margins(x=0, y=0)
     ax[1, 1].grid(True, alpha=0.3)
 
     return fig, ax, canvas, emg_line, cop_point, bt_scat, ang_line
-
 
 # ---------- App ----------
 class App:
