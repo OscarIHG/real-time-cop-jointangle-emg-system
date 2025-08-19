@@ -6,7 +6,8 @@ Publishes CopSample(t, x, y, kg) to a single-item queue (latest only).
 
 - Acepta cop_gain como float (se replica a 4 canales) o lista/tupla de 4 floats.
 - Tare automático al iniciar (promedia varias lecturas para offset).
-- CoP en cm usando distancias x_dist_cm / y_dist_cm (ancho/alto totales de la placa).
+- CoP en cm usando distancias x_dist_cm / y_dist_cm (ancho/alto totales).
+- Flags de orientación: flip_x / flip_y / swap_xy.
 """
 
 import time
@@ -29,7 +30,8 @@ from acquisition_systems.common.utils import put_latest
 class CoPWorker:
     """
     Start/stop lifecycle:
-      w = CoPWorker(gain=1.0, x_dist_cm=55.84, y_dist_cm=40.64, data_interval_ms=10)
+      w = CoPWorker(gain=1.0, x_dist_cm=55.84, y_dist_cm=40.64, data_interval_ms=10,
+                    flip_x=False, flip_y=False, swap_xy=False)
       w.start(); ... read w.queue ... ; w.stop()
     """
     def __init__(
@@ -39,11 +41,14 @@ class CoPWorker:
         y_dist_cm: float,
         data_interval_ms: int = 10,
         offsets: Optional[Sequence[float]] = None,
+        flip_x: bool = False,
+        flip_y: bool = False,
+        swap_xy: bool = False,
     ):
         if VoltageRatioInput is None:
             raise ImportError(f"Phidget22 is required for CoPWorker: {_cop_import_error}")
 
-        # --- NORMALIZACIÓN DE GAIN A 4 CANALES ---
+        # Normaliza gain a 4 canales
         if isinstance(gain, (int, float)):
             self.gain: List[float] = [float(gain)] * 4
         elif isinstance(gain, (list, tuple)):
@@ -54,8 +59,13 @@ class CoPWorker:
             raise ValueError("cop_gain must be a float or a list/tuple of 4 floats.")
 
         self.dt_ms = int(data_interval_ms)
-        self.x_dist_cm = float(x_dist_cm)   # ancho total (2 * half-range X)
-        self.y_dist_cm = float(y_dist_cm)   # alto total  (2 * half-range Y)
+        self.x_dist_cm = float(x_dist_cm)   # ancho total
+        self.y_dist_cm = float(y_dist_cm)   # alto total
+
+        # Flags de orientación
+        self.flip_x = bool(flip_x)
+        self.flip_y = bool(flip_y)
+        self.swap_xy = bool(swap_xy)
 
         self.queue: queue.Queue = queue.Queue(maxsize=1)
         self._stop = threading.Event()
@@ -75,12 +85,11 @@ class CoPWorker:
 
         self._kg = [0.0, 0.0, 0.0, 0.0]
         self._n  = [0.0, 0.0, 0.0, 0.0]
-        self._cal = [False, False, False, False]  # indica si ya hicimos tare
+        self._cal = [False, False, False, False]  # tare hecho
 
     # ---------- handlers ----------
     def _on_vr(self, ch: "VoltageRatioInput", vr: float):
         idx = ch.getChannel()
-        # Ignorar cambios hasta que el canal esté calibrado (tare hecho)
         if not self._cal[idx]:
             return
 
@@ -95,15 +104,22 @@ class CoPWorker:
             copx = 0.0
             copy = 0.0
         else:
-            # momento antero-posterior (m1) y medio-lateral (m2)
-            # Asignación clásica de celdas:
+            # Convención de celdas:
             #  0 ----- 1
             #  |       |
             #  3 ----- 2
-            m1 = -self._n[0] - self._n[3] + self._n[1] + self._n[2]  # AP
-            m2 =  self._n[2] + self._n[3] - self._n[0] - self._n[1]  # ML
-            copx = (self.x_dist_cm / 2.0) * (m1 / f_total)
-            copy = (self.y_dist_cm / 2.0) * (m2 / f_total)
+            m_ap = -self._n[0] - self._n[3] + self._n[1] + self._n[2]  # antero-posterior
+            m_ml =  self._n[2] + self._n[3] - self._n[0] - self._n[1]  # medio-lateral
+            copx = (self.x_dist_cm / 2.0) * (m_ap / f_total)
+            copy = (self.y_dist_cm / 2.0) * (m_ml / f_total)
+
+        # Aplica flags de orientación
+        if self.swap_xy:
+            copx, copy = copy, copx
+        if self.flip_x:
+            copx = -copx
+        if self.flip_y:
+            copy = -copy
 
         put_latest(self.queue, CopSample(t=time.perf_counter(), x=copx, y=copy, kg=kg_total))
 
@@ -113,14 +129,11 @@ class CoPWorker:
         Si ya se proporcionaron offsets en __init__, simplemente marca calibrado.
         """
         if any(self._offset):
-            # Ya vinieron offsets -> marcar calibrado sin medir
             for i in range(4):
                 self._cal[i] = True
             return
 
-        # Usar el data interval configurado
         dt = max(0.001, self.dt_ms / 1000.0)
-        # Limpiar offsets previos
         self._offset = [0.0, 0.0, 0.0, 0.0]
 
         for _ in range(samples):
@@ -129,7 +142,6 @@ class CoPWorker:
                 try:
                     self._offset[i] += c.getVoltageRatio()
                 except Exception:
-                    # Si falla lectura puntual, no abortar
                     self._offset[i] += 0.0
             time.sleep(dt)
 
@@ -140,13 +152,9 @@ class CoPWorker:
     # ---------- public API ----------
     def start(self):
         self._stop.clear()
-        # Abrir y configurar
         for c in self._ch:
             c.openWaitForAttachment(5000)
             c.setDataInterval(self.dt_ms)
-            # Opcional: establecer VoltageRatioChangeTrigger para ruido
-            # c.setVoltageRatioChangeTrigger(0.0)
-        # Medir tare
         self._tare()
 
     def stop(self):

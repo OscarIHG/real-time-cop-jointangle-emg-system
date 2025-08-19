@@ -54,7 +54,10 @@ def start_workers_forgiving(
 
     if want_cop:
         try:
-            w = CoPWorker(cfg.cop_gain, cfg.cop_x_dist_cm, cfg.cop_y_dist_cm, cfg.cop_interval_ms)
+            w = CoPWorker(
+                cfg.cop_gain, cfg.cop_x_dist_cm, cfg.cop_y_dist_cm, cfg.cop_interval_ms,
+                flip_x=cfg.cop_flip_x, flip_y=cfg.cop_flip_y, swap_xy=cfg.cop_swap_xy
+            )
             w.start()
             cop = w
         except Exception as e:

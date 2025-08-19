@@ -22,7 +22,9 @@ class Config:
     emg_allow_lf: bool = False
     emg_start_token: str = "1"
     emg_stop_token: str = "2"
-
+    cop_flip_x: bool = False
+    cop_flip_y: bool = False
+    cop_swap_xy: bool = False
     # CoP (worker inputs y rangos de GUI)
     cop_gain: Any = 1.0            # <-- antes era float; ahora Any para aceptar lista[float] o float
     cop_x_dist_cm: float = 55.84
@@ -76,6 +78,9 @@ def load_config() -> Config:
     cfg.emg_allow_lf      = bool(data.get("emg_allow_lf", cfg.emg_allow_lf))
     cfg.emg_start_token   = str(data.get("emg_start_token", cfg.emg_start_token))
     cfg.emg_stop_token    = str(data.get("emg_stop_token", cfg.emg_stop_token))
+    cfg.cop_flip_x = bool(data.get("cop_flip_x", cfg.cop_flip_x))
+    cfg.cop_flip_y = bool(data.get("cop_flip_y", cfg.cop_flip_y))
+    cfg.cop_swap_xy = bool(data.get("cop_swap_xy", cfg.cop_swap_xy))
 
     # CoP (acepta distancias totales o mitades; deriva si faltan)
     raw_gain = data.get("cop_gain", cfg.cop_gain)
