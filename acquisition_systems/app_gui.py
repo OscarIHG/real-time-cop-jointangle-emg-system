@@ -22,6 +22,7 @@ import tkinter as tk
 from tkinter import ttk
 import time
 from datetime import datetime
+import traceback
 from typing import Optional
 
 import numpy as np
