@@ -24,9 +24,9 @@ class Config:
     emg_stop_token: str = "2"
 
     # CoP (worker inputs y rangos de GUI)
-    cop_gain: float = 1.0
-    cop_x_dist_cm: float = 55.84      # total width  (2 * 27.92)
-    cop_y_dist_cm: float = 40.64      # total height (2 * 20.32)
+    cop_gain: Any = 1.0            # <-- antes era float; ahora Any para aceptar lista[float] o float
+    cop_x_dist_cm: float = 55.84
+    cop_y_dist_cm: float = 40.64
     cop_x_half_range_cm: float = 27.92
     cop_y_half_range_cm: float = 20.32
     cop_interval_ms: int = 10
@@ -78,7 +78,15 @@ def load_config() -> Config:
     cfg.emg_stop_token    = str(data.get("emg_stop_token", cfg.emg_stop_token))
 
     # CoP (acepta distancias totales o mitades; deriva si faltan)
-    cfg.cop_gain          = float(data.get("cop_gain", cfg.cop_gain))
+    raw_gain = data.get("cop_gain", cfg.cop_gain)
+    # normaliza: acepta float o lista/tupla de 4
+    if isinstance(raw_gain, (int, float)):
+        cfg.cop_gain = float(raw_gain)                 # una sola ganancia para las 4 celdas
+    elif isinstance(raw_gain, (list, tuple)):
+        cfg.cop_gain = [float(g) for g in raw_gain]    # lista de 4
+    else:
+        cfg.cop_gain = 1.0                             # fallback seguro
+
     x_half = data.get("cop_x_half_range_cm", cfg.cop_x_half_range_cm)
     y_half = data.get("cop_y_half_range_cm", cfg.cop_y_half_range_cm)
     x_dist = data.get("cop_x_dist_cm", None)
@@ -88,6 +96,7 @@ def load_config() -> Config:
     cfg.cop_x_dist_cm = float(x_dist) if x_dist is not None else 2.0 * float(x_half)
     cfg.cop_y_dist_cm = float(y_dist) if y_dist is not None else 2.0 * float(y_half)
     cfg.cop_interval_ms = int(data.get("cop_interval_ms", cfg.cop_interval_ms))
+
 
     # Camera / Pose
     cfg.cam_index = int(data.get("cam_index", cfg.cam_index))
