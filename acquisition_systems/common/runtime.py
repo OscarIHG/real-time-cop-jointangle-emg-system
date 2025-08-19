@@ -1,16 +1,6 @@
 # -*- coding: utf-8 -*-
 """
 Runtime helpers to start/stop acquisition workers gracefully when some devices are missing.
-
-Usage:
-    from acquisition_systems.common.runtime import start_workers_forgiving, stop_workers
-
-    cfg = load_config()
-    started = start_workers_forgiving(cfg, want_emg=True, want_cop=True, want_pose=True)
-    # started.emg / started.cop / started.pose can be None if failed
-    # started.errors holds reason strings per device key
-    ...
-    stop_workers(started)
 """
 
 from dataclasses import dataclass
@@ -27,7 +17,7 @@ class StartResult:
     emg: Optional[EMGWorker]
     cop: Optional[CoPWorker]
     pose: Optional[PoseWorker]
-    errors: Dict[str, str]  # e.g., {"emg": "RuntimeError: ...", "cop": "No device", "pose": "Camera not available"}
+    errors: Dict[str, str]
 
 
 def start_workers_forgiving(
@@ -36,10 +26,6 @@ def start_workers_forgiving(
     want_cop: bool = True,
     want_pose: bool = True,
 ) -> StartResult:
-    """
-    Try to start each worker; keep running with whichever succeed.
-    Returns StartResult with workers (or None) and an errors dict.
-    """
     if cfg is None:
         cfg = load_config()
 
@@ -48,7 +34,19 @@ def start_workers_forgiving(
 
     if want_emg:
         try:
-            w = EMGWorker(cfg.emg_mac, cfg.emg_rfcomm_channel, cfg.emg_vmin, cfg.emg_vmax)
+            w = EMGWorker(
+                cfg.emg_mac,
+                cfg.emg_rfcomm_channel,
+                cfg.emg_vmin,
+                cfg.emg_vmax,
+                start_token=cfg.emg_start_token,
+                stop_token=cfg.emg_stop_token,
+            )
+            # aplica ALLOW_LF desde config
+            try:
+                w.ALLOW_LF = bool(cfg.emg_allow_lf)
+            except Exception:
+                pass
             w.start()
             emg = w
         except Exception as e:
@@ -74,7 +72,6 @@ def start_workers_forgiving(
 
 
 def stop_workers(result: StartResult):
-    """Stop any worker that actually started."""
     for w in (result.emg, result.cop, result.pose):
         try:
             if w:

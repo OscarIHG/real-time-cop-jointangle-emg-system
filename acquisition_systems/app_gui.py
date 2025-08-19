@@ -5,11 +5,11 @@ Tkinter + Matplotlib GUI orchestrating EMG, CoP, Pose workers with:
 - Status bar (ONLINE/OFFLINE) per device.
 - Merged CSV saving with selectable reference stream.
 - Append auto suffix option.
-- Tuned plots:
-    * EMG: 200-sample scrolling window, ymin>=0 to avoid space below zero.
-    * CoP: real plate dimensions (X: ±27.92 cm, Y: ±20.32 cm), aspect=equal.
-    * Pose: pixel coordinates with labels [px].
-    * Angle: 50-sample scrolling window, y in degrees.
+- Plots driven by config.yaml:
+    * EMG: window (samples) from cfg.emg_plot_window; ymin>=0.
+    * CoP: ranges from cfg.cop_x_half_range_cm / cfg.cop_y_half_range_cm.
+    * Pose: pixels (0..cam_w/0..cam_h) con origen abajo-izquierda.
+    * Angle: window from cfg.angle_plot_window; y fijo ±90°.
 """
 
 # Make this runnable both as a module (-m) and as a script
@@ -32,17 +32,6 @@ from acquisition_systems.common.config import load_config
 from acquisition_systems.common.runtime import start_workers_forgiving, stop_workers, StartResult
 from acquisition_systems.common.utils import get_latest
 from acquisition_systems.recorder import Recorder
-
-# --- Plot tuning constants ---
-EMG_PLOT_WINDOW = 200       # visible EMG samples
-EMG_BUF_MAX     = 5000      # EMG buffer (for smooth scrolling)
-
-ANGLE_PLOT_WINDOW = 50      # visible angle samples
-ANGLE_BUF_MAX     = 2000    # angle buffer
-
-# Real force-plate dimensions (total range ± value)
-COP_X_HALF_RANGE_CM = 27.92
-COP_Y_HALF_RANGE_CM = 20.32
 
 
 # ---------- output directory helpers ----------
@@ -109,8 +98,10 @@ def create_status_bar(master: tk.Widget):
     return frame, emg, cop, pose
 
 
-def create_subplots(master: tk.Widget, cam_w: int, cam_h: int):
-    # Usa constrained_layout para evitar que se encimen títulos/etiquetas entre subplots
+def create_subplots(master: tk.Widget, cam_w: int, cam_h: int,
+                    emg_window: int, angle_window: int,
+                    cop_x_half: float, cop_y_half: float):
+    # Usa constrained_layout para evitar encimados
     fig, ax = plt.subplots(2, 2, figsize=(10, 6), constrained_layout=True)
     canvas = FigureCanvasTkAgg(fig, master=master)
     canvas.draw()
@@ -118,49 +109,46 @@ def create_subplots(master: tk.Widget, cam_w: int, cam_h: int):
 
     # --- EMG ---
     (emg_line,) = ax[0, 0].plot([], [], lw=1.3)
-    ax[0, 0].set_title("Abdominal EMG")     # <- sin "(V)"
-    ax[0, 0].set_ylabel("EMG")              # <- sin unidades para evitar confusiones
-    ax[0, 0].set_ylim(0, 5)                 # el auto-ylim ya respeta ymin>=0 en _tick()
-    ax[0, 0].set_xlim(0, EMG_PLOT_WINDOW)   # ventana visible
+    ax[0, 0].set_title("Abdominal EMG")
+    ax[0, 0].set_ylabel("EMG")
+    ax[0, 0].set_ylim(0, 5)
+    ax[0, 0].set_xlim(0, max(1, int(emg_window)))
     ax[0, 0].margins(x=0, y=0)
     ax[0, 0].grid(True, alpha=0.25)
 
-    # --- CoP (force plate) con dimensiones reales ---
+    # --- CoP (force plate) ---
     (cop_point,) = ax[0, 1].plot([], [], "o", ms=8)
     ax[0, 1].set_title("Center of Pressure [cm]")
-    ax[0, 1].set_xlabel("X [cm]")
-    ax[0, 1].set_ylabel("Y [cm]")
-    ax[0, 1].set_xlim(-COP_X_HALF_RANGE_CM, COP_X_HALF_RANGE_CM)  # ±27.92
-    ax[0, 1].set_ylim(-COP_Y_HALF_RANGE_CM, COP_Y_HALF_RANGE_CM)  # ±20.32
+    ax[0, 1].set_xlabel("X [cm]"); ax[0, 1].set_ylabel("Y [cm]")
+    ax[0, 1].set_xlim(-abs(cop_x_half), abs(cop_x_half))
+    ax[0, 1].set_ylim(-abs(cop_y_half), abs(cop_y_half))
     ax[0, 1].set_aspect("equal", adjustable="box")
     ax[0, 1].margins(x=0, y=0)
     ax[0, 1].grid(True, alpha=0.3)
-    # Asegura que no haya leyenda (por si en algún momento se le agregó un label)
     if getattr(ax[0, 1], "legend_", None) is not None:
         ax[0, 1].legend_.remove()
 
-    # --- Body tracking (px) con 0 en la esquina INFERIOR izquierda ---
+    # --- Body tracking (px) con 0 abajo-izquierda ---
     bt_scat = ax[1, 0].scatter([], [], s=12)
     ax[1, 0].set_title("Body-Tracking Landmarks [px]")
-    ax[1, 0].set_xlabel("x [px]")
-    ax[1, 0].set_ylabel("y [px]")
+    ax[1, 0].set_xlabel("x [px]"); ax[1, 0].set_ylabel("y [px]")
     ax[1, 0].set_xlim(0, cam_w)
-    ax[1, 0].set_ylim(0, cam_h)    # <- SIN invert_yaxis(): 0 queda abajo a la izquierda
-    # ax[1, 0].invert_yaxis()      # (eliminado para que 0 esté abajo)
+    ax[1, 0].set_ylim(0, cam_h)   # 0 en la base; sin invertir eje
     ax[1, 0].set_aspect("equal", adjustable="box")
     ax[1, 0].margins(x=0, y=0)
     ax[1, 0].grid(True, alpha=0.25)
 
-    # --- Joint angle (scroll de 50 muestras) ---
+    # --- Joint angle (scroll configurable) ---
     (ang_line,) = ax[1, 1].plot([], [], lw=2)
     ax[1, 1].set_title("Joint Angle (Pelvic Obliquity 23–24) [deg]")
     ax[1, 1].set_ylabel("Angle [deg]")
     ax[1, 1].set_ylim(-90, 90)
-    ax[1, 1].set_xlim(0, ANGLE_PLOT_WINDOW)
+    ax[1, 1].set_xlim(0, max(1, int(angle_window)))
     ax[1, 1].margins(x=0, y=0)
     ax[1, 1].grid(True, alpha=0.3)
 
     return fig, ax, canvas, emg_line, cop_point, bt_scat, ang_line
+
 
 # ---------- App ----------
 class App:
@@ -168,6 +156,12 @@ class App:
         self.root = root
         self.cfg = load_config()
         self.root.title("Acquisition Systems GUI")
+
+        # Plot settings from config
+        self.emg_plot_window = int(max(1, self.cfg.emg_plot_window))
+        self.angle_plot_window = int(max(1, self.cfg.angle_plot_window))
+        self.cop_x_half = float(self.cfg.cop_x_half_range_cm)
+        self.cop_y_half = float(self.cfg.cop_y_half_range_cm)
 
         # Controls
         (self.e_len, self.e_mac, self.e_name, self.append_var, self.ref_var,
@@ -179,11 +173,15 @@ class App:
         # Status bar
         self.status_frame, self.lbl_emg, self.lbl_cop, self.lbl_pose = create_status_bar(root)
 
-        # Plots
+        # Plots (drive by config)
         (self.fig, self.ax, self.canvas,
-         self.emg_line, self.cop_point, self.bt_scat, self.ang_line) = create_subplots(root, self.cfg.cam_width, self.cfg.cam_height)
-        self._emg_buf = []  # rolling only for plot
-        self._ang_buf = []  # angle rolling buffer
+         self.emg_line, self.cop_point, self.bt_scat, self.ang_line) = create_subplots(
+            root, self.cfg.cam_width, self.cfg.cam_height,
+            self.emg_plot_window, self.angle_plot_window,
+            self.cop_x_half, self.cop_y_half
+        )
+        self._emg_buf = []
+        self._ang_buf = []
 
         # Recorder
         self.rec = Recorder()
@@ -319,66 +317,65 @@ class App:
         pose = get_latest(self.started.pose.landmarks_q, default=None) if self.started.pose else None
         ang  = get_latest(self.started.pose.angle_q,     default=None) if self.started.pose else None
 
-        # --- Plot updates ---
-        # EMG (200-sample scrolling window; ymin >= 0 to avoid space below zero)
+        # --- EMG plot ---
         if emg:
             self._emg_buf.append(emg.value)
-            self._emg_buf = self._emg_buf[-EMG_BUF_MAX:]
+            # buffer grande para scroll suave
+            buf_max = max(self.emg_plot_window * 25, 2000)
+            self._emg_buf = self._emg_buf[-buf_max:]
             x = np.arange(len(self._emg_buf))
             self.emg_line.set_data(x, self._emg_buf)
 
             right = len(self._emg_buf)
-            left  = max(0, right - EMG_PLOT_WINDOW)
-            self.ax[0, 0].set_xlim(left, left + EMG_PLOT_WINDOW)
+            left  = max(0, right - self.emg_plot_window)
+            self.ax[0, 0].set_xlim(left, left + self.emg_plot_window)
 
-            # Auto-ylim suave en la ventana visible (forzar ymin >= 0)
-            if (right - left) >= min(50, EMG_PLOT_WINDOW):
+            # auto-ylim en ventana visible, con ymin>=0
+            if (right - left) >= min(50, self.emg_plot_window):
                 arr = np.asarray(self._emg_buf[left:right], dtype=float)
                 lo = float(np.nanpercentile(arr, 1))
                 hi = float(np.nanpercentile(arr, 99))
                 if hi > lo:
                     margin = 0.15 * (hi - lo)
-                    ymin = max(0.0, lo - margin)   # <-- clamp a 0
+                    ymin = max(0.0, lo - margin)
                     ymax = hi + margin
                     if ymax - ymin < 1e-3:
                         ymin = 0.0
                         ymax = max(0.5, ymax)
                     self.ax[0, 0].set_ylim(ymin, ymax)
 
-        # CoP (solo mover el punto dentro de límites reales ya fijados)
+        # --- CoP plot (solo punto) ---
         if cop:
             self.cop_point.set_data([cop.x], [cop.y])
 
-        # Pose (px)
+        # --- Pose plot ---
         if pose and pose.landmarks is not None and pose.landmarks.size > 0:
             self.bt_scat.set_offsets(pose.landmarks)
 
-        # Joint angle (50-sample scrolling window)
+        # --- Angle plot ---
         if ang:
             self._ang_buf.append(ang.deg)
-            self._ang_buf = self._ang_buf[-ANGLE_BUF_MAX:]
-            ax = self.ax[1, 1]
-            # Dibujar toda la serie para que el scroll sea por índice
+            buf_max = max(self.angle_plot_window * 40, 2000)
+            self._ang_buf = self._ang_buf[-buf_max:]
             x = np.arange(len(self._ang_buf))
             self.ang_line.set_data(x, self._ang_buf)
             right = len(self._ang_buf)
-            left  = max(0, right - ANGLE_PLOT_WINDOW)
-            ax.set_xlim(left, left + ANGLE_PLOT_WINDOW)
-            # y-limits quedan fijos (-90..90) como referencia de ángulo
+            left  = max(0, right - self.angle_plot_window)
+            self.ax[1, 1].set_xlim(left, left + self.angle_plot_window)
+            # y permanece fijo en [-90, 90]
 
-        # --- Recording (native-rate) ---
+        # --- Recording ---
         self.rec.push_emg(emg)
         self.rec.push_cop(cop)
         self.rec.push_pose(pose)
         self.rec.push_angle(ang)
 
-        # Update last-sample timestamps
+        # Timestamps para ONLINE/OFFLINE
         if emg:  self._last_emg  = now
         if cop:  self._last_cop  = now
         if pose: self._last_pose = now
 
         self.canvas.draw_idle()
-        # Refresh dynamic status (detect devices that stopped sending)
         self._update_dynamic_status(now)
         self.root.after(16, self._tick)
 

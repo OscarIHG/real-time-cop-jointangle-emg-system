@@ -1,5 +1,29 @@
 # System configuration (e.g. hardware parameters)
+# --- EMG (ESP32 over RFCOMM) ---
 emg_mac: "A4:CF:12:96:8B:9E"
 emg_rfcomm_channel: 1
 emg_vmin: 0.0
 emg_vmax: 5.0
+emg_allow_lf: false         # ponlo en true si tu firmware envía LF en vez de CRLF
+emg_start_token: "1"
+emg_stop_token: "2"
+
+# --- Center of Pressure (force plate) ---
+cop_gain: 1.0
+# Distancias para el cálculo (si tu worker las usa):
+cop_x_dist_cm: 55.84        # ancho total (2 * 27.92)
+cop_y_dist_cm: 40.64        # alto total  (2 * 20.32)
+# Rangos para el PLOT (mitades):
+cop_x_half_range_cm: 27.92  # ±27.92 cm en X (GUI)
+cop_y_half_range_cm: 20.32  # ±20.32 cm en Y (GUI)
+cop_interval_ms: 10         # ~100 Hz
+
+# --- Pose / Camera ---
+cam_index: 0
+cam_width: 640
+cam_height: 480
+cam_fps: 30
+
+# --- Plot windows (GUI) ---
+emg_plot_window: 200        # muestras visibles (EMG)
+angle_plot_window: 50       # muestras visibles (ángulo)
