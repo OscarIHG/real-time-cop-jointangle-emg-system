@@ -8,7 +8,7 @@ Tkinter + Matplotlib GUI orchestrating EMG, CoP, Pose workers with:
 - Plots driven by config.yaml:
     * EMG: window (samples) from cfg.emg_plot_window; ymin>=0.
     * CoP: ranges from cfg.cop_x_half_range_cm / cfg.cop_y_half_range_cm.
-    * Pose: pixels (0..cam_w/0..cam_h) con origen abajo-izquierda.
+    * Pose: pixels (0..cam_w/0..cam_h) with origin at bottom-left.
     * Angle: window from cfg.angle_plot_window; y fijo ±90°.
 """
 
@@ -102,7 +102,7 @@ def create_status_bar(master: tk.Widget):
 def create_subplots(master: tk.Widget, cam_w: int, cam_h: int,
                     emg_window: int, angle_window: int,
                     cop_x_half: float, cop_y_half: float):
-    # Usa constrained_layout para evitar encimados
+    # Use constrained_layout to avoid overlapping elements
     fig, ax = plt.subplots(2, 2, figsize=(10, 6), constrained_layout=True)
     canvas = FigureCanvasTkAgg(fig, master=master)
     canvas.draw()
@@ -129,12 +129,12 @@ def create_subplots(master: tk.Widget, cam_w: int, cam_h: int,
     if getattr(ax[0, 1], "legend_", None) is not None:
         ax[0, 1].legend_.remove()
 
-    # --- Body tracking (px) con 0 abajo-izquierda ---
+    # --- Body tracking (px) with origin at bottom-left ---
     bt_scat = ax[1, 0].scatter([], [], s=12)
     ax[1, 0].set_title("Body-Tracking Landmarks [px]")
     ax[1, 0].set_xlabel("x [px]"); ax[1, 0].set_ylabel("y [px]")
     ax[1, 0].set_xlim(0, cam_w)
-    ax[1, 0].set_ylim(0, cam_h)   # 0 en la base; sin invertir eje
+    ax[1, 0].set_ylim(0, cam_h)   # zero at the base; do not invert axis
     ax[1, 0].set_aspect("equal", adjustable="box")
     ax[1, 0].margins(x=0, y=0)
     ax[1, 0].grid(True, alpha=0.25)
@@ -174,7 +174,7 @@ class App:
         # Status bar
         self.status_frame, self.lbl_emg, self.lbl_cop, self.lbl_pose = create_status_bar(root)
 
-        # Plots (drive by config)
+        # Plots driven by config
         (self.fig, self.ax, self.canvas,
          self.emg_line, self.cop_point, self.bt_scat, self.ang_line) = create_subplots(
             root, self.cfg.cam_width, self.cfg.cam_height,
@@ -201,7 +201,7 @@ class App:
 
         self.root.protocol("WM_DELETE_WINDOW", self.on_close)
 
-    # ----- helpers -----
+    # ----- helper methods -----
     def _auto_suffix(self) -> str:
         stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
         elapsed = 0 if not self.t_start else int(max(0, time.time() - self.t_start))
@@ -225,19 +225,19 @@ class App:
     def _update_dynamic_status(self, now: float, threshold: float = 2.0):
         if not self.started:
             return
-        # EMG
+        # EMG samples
         emg_online = self.started.emg is not None and self._last_emg is not None and (now - self._last_emg) < threshold
         emg_msg = "" if self.started.emg else self.started.errors.get("emg", "")
         if self.started.emg and not emg_online:
             emg_msg = "no data"
         self._set_status(self.lbl_emg, "EMG", emg_online if self.started.emg else False, emg_msg)
-        # CoP
+        # CoP samples
         cop_online = self.started.cop is not None and self._last_cop is not None and (now - self._last_cop) < threshold
         cop_msg = "" if self.started.cop else self.started.errors.get("cop", "")
         if self.started.cop and not cop_online:
             cop_msg = "no data"
         self._set_status(self.lbl_cop, "CoP", cop_online if self.started.cop else False, cop_msg)
-        # Pose
+        # Pose samples
         pose_online = self.started.pose is not None and self._last_pose is not None and (now - self._last_pose) < threshold
         pose_msg = "" if self.started.pose else self.started.errors.get("pose", "")
         if self.started.pose and not pose_online:
@@ -247,30 +247,30 @@ class App:
     # ----- UI actions -----
     def toggle_start(self):
         if not self.running:
-            # duration
+            # Duration
             try:
                 dur = float(self.e_len.get() or "20")
             except Exception:
                 dur = 20.0
             dur = max(1.0, dur)
 
-            # EMG MAC override
+            # Override EMG MAC
             mac = (self.e_mac.get() or "").strip() or self.cfg.emg_mac
 
-            # load cfg copy with overridden MAC
+            # Load config copy with overridden MAC
             cfg = load_config()
             cfg.emg_mac = mac
 
-            # Start forgiving
+            # Start workers in forgiving mode
             self.started = start_workers_forgiving(cfg, want_emg=True, want_cop=True, want_pose=True)
 
-            # If nothing started, show status and bail
+            # If nothing started, show status and exit
             if not any((self.started.emg, self.started.cop, self.started.pose)):
                 self._refresh_status_labels()
                 print("[WARN] No devices online. Nothing to run.")
                 return
 
-            # reset plot buffers and timer
+            # Reset plot buffers and timer
             self._emg_buf.clear()
             self._ang_buf.clear()
             self.t_start = time.time()
@@ -278,10 +278,10 @@ class App:
             self.running = True
             self.b_start.config(text="Stop")
 
-            # update status bar
+            # Update status bar
             self._refresh_status_labels()
 
-            # loop
+            # Loop
             self._tick()
         else:
             self._stop_all()
@@ -309,7 +309,7 @@ class App:
             return
         now = time.time()
         if now >= self.t_stop:
-            self.toggle_start()  # stop
+            self.toggle_start()  # Stop
             return
 
         try:
@@ -319,7 +319,7 @@ class App:
             pose = get_latest(self.started.pose.landmarks_q, default=None) if self.started.pose else None
             ang  = get_latest(self.started.pose.angle_q,     default=None) if self.started.pose else None
 
-            # --- EMG plot (idéntico a como lo tenías) ---
+            # --- EMG plot (same as before) ---
             if emg:
                 self._emg_buf.append(emg.value)
                 buf_max = max(self.emg_plot_window * 25, 2000)
@@ -344,12 +344,12 @@ class App:
                             ymax = max(0.5, ymax)
                         self.ax[0, 0].set_ylim(ymin, ymax)
 
-            # --- CoP: asegura secuencias de longitud 1 ---
+            # --- CoP: ensure sequences of length one ---
             if cop:
                 try:
                     x_val = float(cop.x)
                     y_val = float(cop.y)
-                    # set_data requiere secuencias; evitamos pasar escalares
+                    # set_data requires sequences; avoid passing scalars
                     self.cop_point.set_data([x_val], [y_val])
                 except Exception:
                     print("[CoP] Bad sample:", cop)
@@ -359,15 +359,15 @@ class App:
             if pose and getattr(pose, "landmarks", None) is not None:
                 lm = pose.landmarks
                 lm = np.asarray(lm)
-                # Asegura forma (N, 2)
+                # Ensure shape (N, 2)
                 if lm.ndim == 1:
-                    # podría venir como lista plana [x0, y0, x1, y1, ...]
+                    # Might arrive as flat list [x0, y0, x1, y1, ...]
                     if lm.size % 2 == 0:
                         lm = lm.reshape(-1, 2)
                     else:
-                        lm = lm[: (lm.size // 2) * 2].reshape(-1, 2)  # descarta último si impar
+                        lm = lm[: (lm.size // 2) * 2].reshape(-1, 2)  # drop last element if odd
                 elif lm.ndim == 2 and lm.shape[1] != 2:
-                    # si viniera NxK, intenta coger primeras 2 columnas
+                    # If shaped NxK, take the first two columns
                     lm = lm[:, :2]
                 if lm.size > 0:
                     self.bt_scat.set_offsets(lm)
@@ -397,7 +397,7 @@ class App:
             self.canvas.draw_idle()
             self._update_dynamic_status(now)
         except Exception:
-            # No dejes que un sample defectuoso tumbe el bucle
+            # Prevent a bad sample from crashing the loop
             print("[GUI] Tick error:")
             traceback.print_exc()
 

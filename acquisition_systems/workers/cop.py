@@ -4,10 +4,10 @@
 CoPWorker: Force-plate acquisition with Phidget22 (4 load cells).
 Publishes CopSample(t, x, y, kg) to a single-item queue (latest only).
 
-- Acepta cop_gain como float (se replica a 4 canales) o lista/tupla de 4 floats.
-- Tare automático al iniciar (promedia varias lecturas para offset).
-- CoP en cm usando distancias x_dist_cm / y_dist_cm (ancho/alto totales).
-- Flags de orientación: flip_x / flip_y / swap_xy.
+- Accepts cop_gain as a float (replicated to 4 channels) or a list/tuple of four floats.
+- Performs automatic tare on start by averaging several readings.
+- Computes CoP in centimeters using x_dist_cm / y_dist_cm as total width/height.
+- Orientation flags: flip_x / flip_y / swap_xy.
 """
 
 import time
@@ -48,7 +48,7 @@ class CoPWorker:
         if VoltageRatioInput is None:
             raise ImportError(f"Phidget22 is required for CoPWorker: {_cop_import_error}")
 
-        # Normaliza gain a 4 canales
+        # Normalize gain to 4 channels
         if isinstance(gain, (int, float)):
             self.gain: List[float] = [float(gain)] * 4
         elif isinstance(gain, (list, tuple)):
@@ -59,10 +59,10 @@ class CoPWorker:
             raise ValueError("cop_gain must be a float or a list/tuple of 4 floats.")
 
         self.dt_ms = int(data_interval_ms)
-        self.x_dist_cm = float(x_dist_cm)   # ancho total
-        self.y_dist_cm = float(y_dist_cm)   # alto total
+        self.x_dist_cm = float(x_dist_cm)   # total width
+        self.y_dist_cm = float(y_dist_cm)   # total height
 
-        # Flags de orientación
+        # Orientation flags
         self.flip_x = bool(flip_x)
         self.flip_y = bool(flip_y)
         self.swap_xy = bool(swap_xy)
@@ -70,13 +70,13 @@ class CoPWorker:
         self.queue: queue.Queue = queue.Queue(maxsize=1)
         self._stop = threading.Event()
 
-        # 4 canales Phidget (0..3)
+        # Four Phidget channels (0..3)
         self._ch = [VoltageRatioInput() for _ in range(4)]
         for i, c in enumerate(self._ch):
             c.setChannel(i)
             c.setOnVoltageRatioChangeHandler(self._on_vr)
 
-        # Estado
+        # State
         self._offset = [0.0, 0.0, 0.0, 0.0]
         if offsets is not None:
             if not isinstance(offsets, (list, tuple)) or len(offsets) != 4:
@@ -85,7 +85,7 @@ class CoPWorker:
 
         self._kg = [0.0, 0.0, 0.0, 0.0]
         self._n  = [0.0, 0.0, 0.0, 0.0]
-        self._cal = [False, False, False, False]  # tare hecho
+        self._cal = [False, False, False, False]  # tare completed
 
     # ---------- handlers ----------
     def _on_vr(self, ch: "VoltageRatioInput", vr: float):
@@ -97,23 +97,23 @@ class CoPWorker:
         self._kg[idx] = kg
         self._n[idx]  = kg * 9.81  # Newtons
 
-        # Recalcular CoP con cada actualización
+        # Recalculate CoP with each update
         f_total = sum(self._n)
         kg_total = sum(self._kg)
         if f_total <= 1e-9:
             copx = 0.0
             copy = 0.0
         else:
-            # Convención de celdas:
+            # Cell convention:
             #  0 ----- 1
             #  |       |
             #  3 ----- 2
-            m_ap = -self._n[0] - self._n[3] + self._n[1] + self._n[2]  # antero-posterior
-            m_ml =  self._n[2] + self._n[3] - self._n[0] - self._n[1]  # medio-lateral
+            m_ap = -self._n[0] - self._n[3] + self._n[1] + self._n[2]  # anteroposterior
+            m_ml =  self._n[2] + self._n[3] - self._n[0] - self._n[1]  # mediolateral
             copx = (self.x_dist_cm / 2.0) * (m_ap / f_total)
             copy = (self.y_dist_cm / 2.0) * (m_ml / f_total)
 
-        # Aplica flags de orientación
+        # Apply orientation flags
         if self.swap_xy:
             copx, copy = copy, copx
         if self.flip_x:
@@ -125,8 +125,8 @@ class CoPWorker:
 
     def _tare(self, samples: int = 16):
         """
-        Promedia 'samples' lecturas por canal para estimar offset de voltaje.
-        Si ya se proporcionaron offsets en __init__, simplemente marca calibrado.
+        Average 'samples' readings per channel to estimate voltage offset.
+        If offsets were provided in __init__, simply mark as calibrated.
         """
         if any(self._offset):
             for i in range(4):

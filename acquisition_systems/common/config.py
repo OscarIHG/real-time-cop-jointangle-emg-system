@@ -25,8 +25,8 @@ class Config:
     cop_flip_x: bool = False
     cop_flip_y: bool = False
     cop_swap_xy: bool = False
-    # CoP (worker inputs y rangos de GUI)
-    cop_gain: Any = 1.0            # <-- antes era float; ahora Any para aceptar lista[float] o float
+    # CoP (worker inputs and GUI ranges)
+    cop_gain: Any = 1.0            # was float; now Any to accept list[float] or float
     cop_x_dist_cm: float = 55.84
     cop_y_dist_cm: float = 40.64
     cop_x_half_range_cm: float = 27.92
@@ -46,7 +46,7 @@ class Config:
 
 def _repo_root() -> str:
     here = os.path.abspath(os.path.dirname(__file__))
-    return os.path.abspath(os.path.join(here, os.pardir, os.pardir))  # repo/
+    return os.path.abspath(os.path.join(here, os.pardir, os.pardir))  # repository root
 
 
 def _load_yaml(path: str) -> Dict[str, Any]:
@@ -63,7 +63,7 @@ def _load_yaml(path: str) -> Dict[str, Any]:
 
 
 def load_config() -> Config:
-    # Busca config.yaml en repo root
+    # Look for config.yaml in the repository root
     root = _repo_root()
     ypath = os.path.join(root, "config.yaml")
     data = _load_yaml(ypath)
@@ -82,15 +82,15 @@ def load_config() -> Config:
     cfg.cop_flip_y = bool(data.get("cop_flip_y", cfg.cop_flip_y))
     cfg.cop_swap_xy = bool(data.get("cop_swap_xy", cfg.cop_swap_xy))
 
-    # CoP (acepta distancias totales o mitades; deriva si faltan)
+    # CoP (accepts total distances or half ranges; derive missing values if needed)
     raw_gain = data.get("cop_gain", cfg.cop_gain)
-    # normaliza: acepta float o lista/tupla de 4
+    # Normalize: accept a float or a list/tuple of four values
     if isinstance(raw_gain, (int, float)):
-        cfg.cop_gain = float(raw_gain)                 # una sola ganancia para las 4 celdas
+        cfg.cop_gain = float(raw_gain)                 # single gain for the four cells
     elif isinstance(raw_gain, (list, tuple)):
-        cfg.cop_gain = [float(g) for g in raw_gain]    # lista de 4
+        cfg.cop_gain = [float(g) for g in raw_gain]    # list of four gains
     else:
-        cfg.cop_gain = 1.0                             # fallback seguro
+        cfg.cop_gain = 1.0                             # safe fallback
 
     x_half = data.get("cop_x_half_range_cm", cfg.cop_x_half_range_cm)
     y_half = data.get("cop_y_half_range_cm", cfg.cop_y_half_range_cm)

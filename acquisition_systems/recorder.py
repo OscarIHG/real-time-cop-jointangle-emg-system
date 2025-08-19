@@ -21,35 +21,35 @@ import numpy as np
 
 from acquisition_systems.common.types import EmgSample, CopSample, PoseSample, AngleSample
 
-LM_COUNT = 33  # MediaPipe Pose
+LM_COUNT = 33  # MediaPipe Pose uses 33 landmarks
 
 
 class Recorder:
     def __init__(self):
-        # native-rate buffers (append only)
+        # Buffers storing samples at their original sampling rate
         self._emg: List[EmgSample] = []
         self._cop: List[CopSample] = []
         self._pose: List[PoseSample] = []
         self._ang: List[AngleSample] = []
 
-    # -------- push APIs (call only when a new sample arrives) --------
-    def push_emg(self, s: Optional[EmgSample]):  # (t, value)
+    # -------- push APIs (call only when a new sample is available) --------
+    def push_emg(self, s: Optional[EmgSample]):  # sample is (timestamp, value)
         if s is not None:
             self._emg.append(s)
 
-    def push_cop(self, s: Optional[CopSample]):  # (t, x, y, kg)
+    def push_cop(self, s: Optional[CopSample]):  # sample is (timestamp, x, y, kg)
         if s is not None:
             self._cop.append(s)
 
-    def push_pose(self, s: Optional[PoseSample]):  # (t, landmarks(33,2))
+    def push_pose(self, s: Optional[PoseSample]):  # sample is (timestamp, landmarks(33,2))
         if s is not None:
             self._pose.append(s)
 
-    def push_angle(self, s: Optional[AngleSample]):  # (t, deg)
+    def push_angle(self, s: Optional[AngleSample]):  # sample is (timestamp, degrees)
         if s is not None:
             self._ang.append(s)
 
-    # -------- export (merged) --------
+    # -------- export merged streams --------
     def to_csv_merged(
         self,
         out_dir: str,
@@ -71,10 +71,10 @@ class Recorder:
         os.makedirs(out_dir, exist_ok=True)
         path = os.path.join(out_dir, base_name)
 
-        # choose reference
+        # Pick the reference timeline
         ref_name, ref_times = self._choose_reference(reference)
 
-        # Prepare iterators (monotonic by append-time; assume non-decreasing t)
+        # Prepare iterators; assume timestamps never decrease
         emg_i = cop_i = pose_i = ang_i = -1
         emg_last = cop_last = pose_last = ang_last = None
 
@@ -86,16 +86,16 @@ class Recorder:
             w = csv.writer(f)
             w.writerow(header)
 
-            # pre-extract arrays of times for fast advancing
+            # Pre-extract arrays of timestamps for quick traversal
             emg_t = np.array([s.t for s in self._emg], dtype=float)
             cop_t = np.array([s.t for s in self._cop], dtype=float)
             pose_t = np.array([s.t for s in self._pose], dtype=float)
             ang_t = np.array([s.t for s in self._ang], dtype=float)
 
             for t in ref_times:
-                # advance per stream up to time <= t
+                # Advance each stream up to time <= current t
                 if emg_t.size:
-                    # indices strictly increasing; advance while next <= t
+                    # Indices increase strictly; advance while next timestamp <= t
                     while emg_i + 1 < emg_t.size and emg_t[emg_i + 1] <= t:
                         emg_i += 1
                         emg_last = self._emg[emg_i]
@@ -112,7 +112,7 @@ class Recorder:
                         ang_i += 1
                         ang_last = self._ang[ang_i]
 
-                # build row with last-known samples
+                # Create a row using the most recent samples
                 emg_v = _f(emg_last.value) if emg_last else float("nan")
                 cop_x = _f(cop_last.x) if cop_last else float("nan")
                 cop_y = _f(cop_last.y) if cop_last else float("nan")
@@ -130,7 +130,7 @@ class Recorder:
 
         return path
 
-    # -------- export (optional per-stream helpers) --------
+    # -------- export helpers for individual streams --------
     def to_csv_per_stream(self, out_dir: str, base_name: str) -> List[str]:
         """
         Save one CSV per stream at their native rates.
@@ -146,19 +146,19 @@ class Recorder:
                 w.writerows(rows)
             files.append(path)
 
-        # EMG
+        # EMG stream
         emg_rows = [[_f(s.t), _f(s.value)] for s in self._emg]
         save(os.path.join(out_dir, f"{base_name}_emg.csv"), ["time_s", "emg_V"], emg_rows)
 
-        # CoP
+        # CoP stream
         cop_rows = [[_f(s.t), _f(s.x), _f(s.y), _f(s.kg)] for s in self._cop]
         save(os.path.join(out_dir, f"{base_name}_cop.csv"), ["time_s", "cop_x_cm", "cop_y_cm", "weight_kg"], cop_rows)
 
-        # Angle
+        # Angle stream
         ang_rows = [[_f(s.t), _f(s.deg)] for s in self._ang]
         save(os.path.join(out_dir, f"{base_name}_angle.csv"), ["time_s", "angle_deg"], ang_rows)
 
-        # Landmarks
+        # Pose landmarks
         lm_header = ["time_s"] + [f"lm{i}_{c}" for i in range(LM_COUNT) for c in ("x", "y")]
         lm_rows = []
         for s in self._pose:
@@ -182,7 +182,7 @@ class Recorder:
         elif reference == "angle":
             ref = self._ang
         else:
-            # auto: densest buffer
+            # Automatically pick the stream with the most samples
             candidates = [("emg", self._emg), ("cop", self._cop), ("pose", self._pose), ("angle", self._ang)]
             ref_name, ref = max(candidates, key=lambda kv: len(kv[1]))
             return ref_name, np.array([s.t for s in ref], dtype=float)

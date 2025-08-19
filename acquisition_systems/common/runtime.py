@@ -42,7 +42,7 @@ def start_workers_forgiving(
                 start_token=cfg.emg_start_token,
                 stop_token=cfg.emg_stop_token,
             )
-            # aplica ALLOW_LF desde config
+            # Apply ALLOW_LF flag from configuration
             try:
                 w.ALLOW_LF = bool(cfg.emg_allow_lf)
             except Exception:
