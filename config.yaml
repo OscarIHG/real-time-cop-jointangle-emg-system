@@ -17,6 +17,10 @@ cop_y_dist_cm: 40.64        # alto total  (2 * 20.32)
 cop_x_half_range_cm: 27.92  # ±27.92 cm en X (GUI)
 cop_y_half_range_cm: 20.32  # ±20.32 cm en Y (GUI)
 cop_interval_ms: 10         # ~100 Hz
+# Orientation flags
+cop_flip_x: false
+cop_flip_y: true   # <-- ponlo en true para que "arriba" sea positivo
+cop_swap_xy: false
 
 # --- Pose / Camera ---
 cam_index: 0
