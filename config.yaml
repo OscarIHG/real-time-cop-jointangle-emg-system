@@ -1,1 +1,5 @@
 # System configuration (e.g. hardware parameters)
+emg_mac: "A4:CF:12:96:8B:9E"
+emg_rfcomm_channel: 1
+emg_vmin: 0.0
+emg_vmax: 5.0
