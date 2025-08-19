@@ -32,7 +32,7 @@ else:
     _emg_import_error = None
 
 from acquisition_systems.common.types import EmgSample
-    # put_latest: push latest only into a 1-item queue
+# put_latest keeps only the latest item in a single-slot queue
 from acquisition_systems.common.utils import put_latest
 
 
@@ -79,12 +79,12 @@ class EMGWorker:
     def _connect(self):
         _dbg(f"Connecting RFCOMM to {self.mac} ch {self.chan} ...")
         self.sock = bluetooth.BluetoothSocket(bluetooth.RFCOMM)
-        # Nota: evitamos settimeout para replicar 1:1 el script que funciona
+        # We avoid settimeout to match the working script exactly
         self.sock.connect((self.mac, self.chan))
         _dbg("Connected. Sending start token...")
         try:
             if self.start_token:
-                # En tu script single envías cadena, no bytes; mantenemos igual.
+                # Your standalone script sends a string, not bytes; keep the same
                 self.sock.send(self.start_token)
         except Exception as e:
             _dbg(f"Start token send failed (ignored): {e}")
@@ -180,7 +180,7 @@ class EMGWorker:
     def start(self):
         """Connect in main thread, then start background reader."""
         self._stop.clear()
-        # Conectar aquí replica tu script single y evita problemas de BlueZ en algunos entornos.
+        # Connecting here mirrors the standalone script and avoids BlueZ issues on some systems
         self._connect()
         self._thread = threading.Thread(target=self._loop, daemon=True)
         self._thread.start()
