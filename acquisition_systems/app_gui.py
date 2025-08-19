@@ -35,6 +35,10 @@ from acquisition_systems.common.runtime import start_workers_forgiving, stop_wor
 from acquisition_systems.common.utils import get_latest
 from acquisition_systems.recorder import Recorder
 
+# --- Plot tuning ---
+EMG_PLOT_WINDOW = 200   # muestras visibles (ventana desplazable)
+EMG_BUF_MAX     = 5000  # tamaño máximo del buffer en memoria (para scroll fluido)
+
 
 # ---------- output directory helpers ----------
 def get_sessions_dir() -> str:
@@ -132,7 +136,7 @@ def create_subplots(master: tk.Widget, cam_w: int, cam_h: int):
     (emg_line,) = ax[0, 0].plot([], [], lw=1.3)
     ax[0, 0].set_title("Abdominal EMG (V)")
     ax[0, 0].set_ylim(0, 5)
-    ax[0, 0].set_xlim(0, 1000)
+    ax[0, 0].set_xlim(0, EMG_PLOT_WINDOW)  # antes era 1000
     ax[0, 0].grid(True, alpha=0.25)
 
     # CoP
@@ -362,11 +366,29 @@ class App:
         # Plot
         if emg:
             self._emg_buf.append(emg.value)
-            self._emg_buf = self._emg_buf[-1000:]
+            # mantenemos un buffer grande para que el eje X pueda desplazarse
+            self._emg_buf = self._emg_buf[-EMG_BUF_MAX:]
             x = np.arange(len(self._emg_buf))
             self.emg_line.set_data(x, self._emg_buf)
-            left = max(0, len(self._emg_buf) - 1000)
-            self.ax[0, 0].set_xlim(left, left + 1000)
+
+            # ventana desplazable de 200 muestras
+            right = len(self._emg_buf)
+            left  = max(0, right - EMG_PLOT_WINDOW)
+            self.ax[0, 0].set_xlim(left, left + EMG_PLOT_WINDOW)
+
+            # (opcional) auto-escala suave en Y usando solo la ventana visible
+            if (right - left) >= min(50, EMG_PLOT_WINDOW):  # espera ~50 pts para estabilizar
+                arr = np.asarray(self._emg_buf[left:right], dtype=float)
+                lo = float(np.nanpercentile(arr, 1))
+                hi = float(np.nanpercentile(arr, 99))
+                if hi > lo:
+                    margin = 0.15 * (hi - lo)
+                    ymin = lo - margin
+                    ymax = hi + margin
+                    if ymax - ymin < 1e-3:  # señal casi plana
+                        ymin -= 0.5
+                        ymax += 0.5
+                    self.ax[0, 0].set_ylim(ymin, ymax)
 
         if cop:
             self.cop_point.set_data([cop.x], [cop.y])
