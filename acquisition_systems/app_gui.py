@@ -311,72 +311,95 @@ class App:
             self.toggle_start()  # stop
             return
 
-        # Latest samples
-        emg  = get_latest(self.started.emg.queue,  default=None) if self.started.emg else None
-        cop  = get_latest(self.started.cop.queue,  default=None) if self.started.cop else None
-        pose = get_latest(self.started.pose.landmarks_q, default=None) if self.started.pose else None
-        ang  = get_latest(self.started.pose.angle_q,     default=None) if self.started.pose else None
+        try:
+            # Latest samples
+            emg  = get_latest(self.started.emg.queue,  default=None) if self.started.emg else None
+            cop  = get_latest(self.started.cop.queue,  default=None) if self.started.cop else None
+            pose = get_latest(self.started.pose.landmarks_q, default=None) if self.started.pose else None
+            ang  = get_latest(self.started.pose.angle_q,     default=None) if self.started.pose else None
 
-        # --- EMG plot ---
-        if emg:
-            self._emg_buf.append(emg.value)
-            # buffer grande para scroll suave
-            buf_max = max(self.emg_plot_window * 25, 2000)
-            self._emg_buf = self._emg_buf[-buf_max:]
-            x = np.arange(len(self._emg_buf))
-            self.emg_line.set_data(x, self._emg_buf)
+            # --- EMG plot (idéntico a como lo tenías) ---
+            if emg:
+                self._emg_buf.append(emg.value)
+                buf_max = max(self.emg_plot_window * 25, 2000)
+                self._emg_buf = self._emg_buf[-buf_max:]
+                x = np.arange(len(self._emg_buf))
+                self.emg_line.set_data(x, self._emg_buf)
 
-            right = len(self._emg_buf)
-            left  = max(0, right - self.emg_plot_window)
-            self.ax[0, 0].set_xlim(left, left + self.emg_plot_window)
+                right = len(self._emg_buf)
+                left  = max(0, right - self.emg_plot_window)
+                self.ax[0, 0].set_xlim(left, left + self.emg_plot_window)
 
-            # auto-ylim en ventana visible, con ymin>=0
-            if (right - left) >= min(50, self.emg_plot_window):
-                arr = np.asarray(self._emg_buf[left:right], dtype=float)
-                lo = float(np.nanpercentile(arr, 1))
-                hi = float(np.nanpercentile(arr, 99))
-                if hi > lo:
-                    margin = 0.15 * (hi - lo)
-                    ymin = max(0.0, lo - margin)
-                    ymax = hi + margin
-                    if ymax - ymin < 1e-3:
-                        ymin = 0.0
-                        ymax = max(0.5, ymax)
-                    self.ax[0, 0].set_ylim(ymin, ymax)
+                if (right - left) >= min(50, self.emg_plot_window):
+                    arr = np.asarray(self._emg_buf[left:right], dtype=float)
+                    lo = float(np.nanpercentile(arr, 1))
+                    hi = float(np.nanpercentile(arr, 99))
+                    if hi > lo:
+                        margin = 0.15 * (hi - lo)
+                        ymin = max(0.0, lo - margin)
+                        ymax = hi + margin
+                        if ymax - ymin < 1e-3:
+                            ymin = 0.0
+                            ymax = max(0.5, ymax)
+                        self.ax[0, 0].set_ylim(ymin, ymax)
 
-        # --- CoP plot (solo punto) ---
-        if cop:
-            self.cop_point.set_data([cop.x], [cop.y])
+            # --- CoP: asegura secuencias de longitud 1 ---
+            if cop:
+                try:
+                    x_val = float(cop.x)
+                    y_val = float(cop.y)
+                    # set_data requiere secuencias; evitamos pasar escalares
+                    self.cop_point.set_data([x_val], [y_val])
+                except Exception:
+                    print("[CoP] Bad sample:", cop)
+                    raise
 
-        # --- Pose plot ---
-        if pose and pose.landmarks is not None and pose.landmarks.size > 0:
-            self.bt_scat.set_offsets(pose.landmarks)
+            # --- Pose (landmarks Nx2) ---
+            if pose and getattr(pose, "landmarks", None) is not None:
+                lm = pose.landmarks
+                lm = np.asarray(lm)
+                # Asegura forma (N, 2)
+                if lm.ndim == 1:
+                    # podría venir como lista plana [x0, y0, x1, y1, ...]
+                    if lm.size % 2 == 0:
+                        lm = lm.reshape(-1, 2)
+                    else:
+                        lm = lm[: (lm.size // 2) * 2].reshape(-1, 2)  # descarta último si impar
+                elif lm.ndim == 2 and lm.shape[1] != 2:
+                    # si viniera NxK, intenta coger primeras 2 columnas
+                    lm = lm[:, :2]
+                if lm.size > 0:
+                    self.bt_scat.set_offsets(lm)
 
-        # --- Angle plot ---
-        if ang:
-            self._ang_buf.append(ang.deg)
-            buf_max = max(self.angle_plot_window * 40, 2000)
-            self._ang_buf = self._ang_buf[-buf_max:]
-            x = np.arange(len(self._ang_buf))
-            self.ang_line.set_data(x, self._ang_buf)
-            right = len(self._ang_buf)
-            left  = max(0, right - self.angle_plot_window)
-            self.ax[1, 1].set_xlim(left, left + self.angle_plot_window)
-            # y permanece fijo en [-90, 90]
+            # --- Angle (scroll) ---
+            if ang:
+                self._ang_buf.append(ang.deg)
+                buf_max = max(self.angle_plot_window * 40, 2000)
+                self._ang_buf = self._ang_buf[-buf_max:]
+                x = np.arange(len(self._ang_buf))
+                self.ang_line.set_data(x, self._ang_buf)
+                right = len(self._ang_buf)
+                left  = max(0, right - self.angle_plot_window)
+                self.ax[1, 1].set_xlim(left, left + self.angle_plot_window)
 
-        # --- Recording ---
-        self.rec.push_emg(emg)
-        self.rec.push_cop(cop)
-        self.rec.push_pose(pose)
-        self.rec.push_angle(ang)
+            # --- Recording ---
+            self.rec.push_emg(emg)
+            self.rec.push_cop(cop)
+            self.rec.push_pose(pose)
+            self.rec.push_angle(ang)
 
-        # Timestamps para ONLINE/OFFLINE
-        if emg:  self._last_emg  = now
-        if cop:  self._last_cop  = now
-        if pose: self._last_pose = now
+            # ONLINE/OFFLINE timestamps
+            if emg:  self._last_emg  = now
+            if cop:  self._last_cop  = now
+            if pose: self._last_pose = now
 
-        self.canvas.draw_idle()
-        self._update_dynamic_status(now)
+            self.canvas.draw_idle()
+            self._update_dynamic_status(now)
+        except Exception:
+            # No dejes que un sample defectuoso tumbe el bucle
+            print("[GUI] Tick error:")
+            traceback.print_exc()
+
         self.root.after(16, self._tick)
 
     def _stop_all(self):

@@ -1,0 +1,18 @@
+python - <<'PY'
+import time, os, sys
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)) + "/acquisition_systems/..")
+from acquisition_systems.common.config import load_config
+from acquisition_systems.workers.cop import CoPWorker
+from acquisition_systems.common.utils import get_latest
+
+cfg = load_config()
+w = CoPWorker(cfg.cop_gain, cfg.cop_x_dist_cm, cfg.cop_y_dist_cm, cfg.cop_interval_ms)
+w.start()
+t0 = time.time()
+while time.time() - t0 < 2.0:
+    s = get_latest(w.queue, default=None)
+    if s:
+        print("CoP:", s.x, s.y)
+    time.sleep(0.01)
+w.stop()
+PY
