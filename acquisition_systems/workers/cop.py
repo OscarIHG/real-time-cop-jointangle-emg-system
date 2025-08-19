@@ -28,6 +28,18 @@ class CoPWorker:
       w.start(); ... read w.queue ... ; w.stop()
     """
     def __init__(self, gain: List[float], x_dist_cm: float, y_dist_cm: float, data_interval_ms: int = 10):
+        if isinstance(gain, (int, float)):
+            self.gain = [float(gain)] * 4
+        elif isinstance(gain, (list, tuple)):
+            if len(gain) != 4:
+                raise ValueError("cop_gain must be a float or a list of 4 floats (one per channel).")
+            self.gain = [float(g) for g in gain]
+        else:
+            raise ValueError("cop_gain must be a float or a list of 4 floats.")
+        self.x_dist_cm = float(x_dist_cm)
+        self.y_dist_cm = float(y_dist_cm)
+        self.interval_ms = int(interval_ms)
+        
         if VoltageRatioInput is None:
             raise ImportError(f"Phidget22 is required for CoPWorker: {_cop_import_error}")
 

@@ -9,7 +9,12 @@ emg_start_token: "1"
 emg_stop_token: "2"
 
 # --- Center of Pressure (force plate) ---
-cop_gain: 1.0
+# Calibración por canal (Phidget Control Panel)
+cop_gain:
+  - 173385.348938015
+  - 179629.962277708
+  - 176102.844060932
+  - 179195.530109193
 # Distancias para el cálculo (si tu worker las usa):
 cop_x_dist_cm: 55.84        # ancho total (2 * 27.92)
 cop_y_dist_cm: 40.64        # alto total  (2 * 20.32)
