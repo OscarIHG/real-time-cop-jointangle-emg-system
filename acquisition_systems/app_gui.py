@@ -1,17 +1,15 @@
 # -*- coding: utf-8 -*-
 """
-Tkinter + Matplotlib GUI orchestrating three acquisition workers (EMG, CoP, Pose)
-with graceful degradation if some devices are offline.
-
-- Status bar shows ONLINE/OFFLINE per device (EMG/CoP/Pose).
-- Multi-rate recording; merged CSV with selectable reference stream.
-- "Append auto suffix" option akin to headless.
-
-Run (recommended from project root):
-  python -m acquisition_systems.app_gui
-
-You can also run directly:
-  python acquisition_systems/app_gui.py
+Tkinter + Matplotlib GUI orchestrating EMG, CoP, Pose workers with:
+- Graceful degradation if some devices are offline.
+- Status bar (ONLINE/OFFLINE) per device.
+- Merged CSV saving with selectable reference stream.
+- Append auto suffix option.
+- Tuned plots:
+    * EMG: 200-sample scrolling window, ymin>=0 to avoid space below zero.
+    * CoP: real plate dimensions (X: ±27.92 cm, Y: ±20.32 cm), aspect=equal.
+    * Pose: pixel coordinates with labels [px].
+    * Angle: 50-sample scrolling window, y in degrees.
 """
 
 # Make this runnable both as a module (-m) and as a script
@@ -35,24 +33,25 @@ from acquisition_systems.common.runtime import start_workers_forgiving, stop_wor
 from acquisition_systems.common.utils import get_latest
 from acquisition_systems.recorder import Recorder
 
-# --- Plot tuning ---
-EMG_PLOT_WINDOW = 200   # muestras visibles (ventana desplazable)
-EMG_BUF_MAX     = 5000  # tamaño máximo del buffer en memoria (para scroll fluido)
+# --- Plot tuning constants ---
+EMG_PLOT_WINDOW = 200       # visible EMG samples
+EMG_BUF_MAX     = 5000      # EMG buffer (for smooth scrolling)
+
+ANGLE_PLOT_WINDOW = 50      # visible angle samples
+ANGLE_BUF_MAX     = 2000    # angle buffer
+
+# Real force-plate dimensions (total range ± value)
+COP_X_HALF_RANGE_CM = 27.92
+COP_Y_HALF_RANGE_CM = 20.32
 
 
 # ---------- output directory helpers ----------
 def get_sessions_dir() -> str:
-    """
-    Base directory to store CSVs. Defaults to <project_root>/sessions.
-    Override with env var AS_OUTDIR.
-    """
     base = os.environ.get("AS_OUTDIR")
     if base:
         return base
-    # project root = parent of this file's directory
     root = os.path.abspath(os.path.join(os.path.dirname(__file__), os.pardir))
     return os.path.join(root, "sessions")
-
 
 def dated_subdir(base: str) -> str:
     day = datetime.now().strftime("%Y-%m-%d")
@@ -67,21 +66,15 @@ def create_control_bar(master: tk.Widget, default_mac: str):
 
     # Duration
     tk.Label(frame, text="Duration (s):").pack(side=tk.LEFT, padx=5)
-    e_len = tk.Entry(frame, width=6)
-    e_len.insert(0, "20")
-    e_len.pack(side=tk.LEFT)
+    e_len = tk.Entry(frame, width=6); e_len.insert(0, "20"); e_len.pack(side=tk.LEFT)
 
     # EMG MAC
     tk.Label(frame, text="EMG MAC:").pack(side=tk.LEFT, padx=(20, 5))
-    e_mac = tk.Entry(frame, width=17)
-    e_mac.insert(0, default_mac)
-    e_mac.pack(side=tk.LEFT)
+    e_mac = tk.Entry(frame, width=17); e_mac.insert(0, default_mac); e_mac.pack(side=tk.LEFT)
 
     # Filename
     tk.Label(frame, text="Filename:").pack(side=tk.LEFT, padx=(20, 5))
-    e_name = tk.Entry(frame, width=22)
-    e_name.insert(0, "")
-    e_name.pack(side=tk.LEFT)
+    e_name = tk.Entry(frame, width=22); e_name.insert(0, ""); e_name.pack(side=tk.LEFT)
 
     # Append suffix
     append_var = tk.BooleanVar(value=False)
@@ -91,24 +84,15 @@ def create_control_bar(master: tk.Widget, default_mac: str):
     # Reference selector
     tk.Label(frame, text="Reference:").pack(side=tk.LEFT, padx=(20, 5))
     ref_var = tk.StringVar(value="auto")
-    ref_combo = ttk.Combobox(
-        frame,
-        textvariable=ref_var,
-        values=("auto", "emg", "cop", "pose", "angle"),
-        width=7,
-        state="readonly",
-    )
+    ref_combo = ttk.Combobox(frame, textvariable=ref_var,
+                             values=("auto", "emg", "cop", "pose", "angle"),
+                             width=7, state="readonly")
     ref_combo.pack(side=tk.LEFT)
 
     # Buttons
-    b_start = tk.Button(frame, text="Start")
-    b_start.pack(side=tk.LEFT, padx=8)
-
-    b_save = tk.Button(frame, text="Save CSV")
-    b_save.pack(side=tk.LEFT, padx=8)
-
-    b_quit = tk.Button(frame, text="Quit")
-    b_quit.pack(side=tk.LEFT, padx=8)
+    b_start = tk.Button(frame, text="Start"); b_start.pack(side=tk.LEFT, padx=8)
+    b_save  = tk.Button(frame, text="Save CSV"); b_save.pack(side=tk.LEFT, padx=8)
+    b_quit  = tk.Button(frame, text="Quit"); b_quit.pack(side=tk.LEFT, padx=8)
 
     frame.pack(fill="x", padx=10, pady=6)
     return e_len, e_mac, e_name, append_var, ref_var, b_start, b_save, b_quit
@@ -117,11 +101,11 @@ def create_control_bar(master: tk.Widget, default_mac: str):
 def create_status_bar(master: tk.Widget):
     frame = tk.Frame(master)
     emg = tk.Label(frame, text="EMG: —", fg="gray")
-    cop = tk.Label(frame, text="CoP: —", fg="gray")
+    cop = tk.Label(frame, text="CoP: —",  fg="gray")
     pose = tk.Label(frame, text="Pose: —", fg="gray")
     for w in (emg, cop, pose):
         w.pack(side=tk.LEFT, padx=12)
-    frame.pack(fill="x", padx=10, pady=(0, 6))
+    frame.pack(fill="x", padx=10, pady=(0,6))
     return frame, emg, cop, pose
 
 
@@ -135,32 +119,40 @@ def create_subplots(master: tk.Widget, cam_w: int, cam_h: int):
     # EMG
     (emg_line,) = ax[0, 0].plot([], [], lw=1.3)
     ax[0, 0].set_title("Abdominal EMG (V)")
-    ax[0, 0].set_ylim(0, 5)
-    ax[0, 0].set_xlim(0, EMG_PLOT_WINDOW)  # antes era 1000
+    ax[0, 0].set_ylabel("EMG [V]")
+    ax[0, 0].set_ylim(0, 5)                      # start at [0..5]; dynamic ylim will keep ymin>=0
+    ax[0, 0].set_xlim(0, EMG_PLOT_WINDOW)        # visible window = 200 samples
+    ax[0, 0].margins(x=0, y=0)                   # no extra padding
     ax[0, 0].grid(True, alpha=0.25)
 
-    # CoP
+    # CoP (force plate) with real dimensions
     (cop_point,) = ax[0, 1].plot([], [], "o", ms=8)
-    ax[0, 1].set_title("Center of Pressure (cm)")
-    ax[0, 1].set_xlim(-30, 30)
-    ax[0, 1].set_ylim(-22, 22)
+    ax[0, 1].set_title("Center of Pressure [cm]")
+    ax[0, 1].set_xlabel("X [cm]"); ax[0, 1].set_ylabel("Y [cm]")
+    ax[0, 1].set_xlim(-COP_X_HALF_RANGE_CM, COP_X_HALF_RANGE_CM)  # ±27.92
+    ax[0, 1].set_ylim(-COP_Y_HALF_RANGE_CM, COP_Y_HALF_RANGE_CM)  # ±20.32
     ax[0, 1].set_aspect("equal", adjustable="box")
+    ax[0, 1].margins(x=0, y=0)
     ax[0, 1].grid(True, alpha=0.3)
 
-    # Landmarks
+    # Body tracking (px)
     bt_scat = ax[1, 0].scatter([], [], s=12)
-    ax[1, 0].set_title("Body-Tracking Landmarks (px)")
+    ax[1, 0].set_title("Body-Tracking Landmarks [px]")
+    ax[1, 0].set_xlabel("x [px]"); ax[1, 0].set_ylabel("y [px]")
     ax[1, 0].set_xlim(0, cam_w)
     ax[1, 0].set_ylim(0, cam_h)
-    ax[1, 0].invert_yaxis()
+    ax[1, 0].invert_yaxis()  # origin at top-left, typical image coords
     ax[1, 0].set_aspect("equal", adjustable="box")
+    ax[1, 0].margins(x=0, y=0)
     ax[1, 0].grid(True, alpha=0.25)
 
-    # Angle
+    # Joint angle with 50-sample scrolling window
     (ang_line,) = ax[1, 1].plot([], [], lw=2)
     ax[1, 1].set_title("Joint Angle (Pelvic Obliquity 23–24) [deg]")
+    ax[1, 1].set_ylabel("Angle [deg]")
     ax[1, 1].set_ylim(-90, 90)
-    ax[1, 1].set_xlim(0, 900)
+    ax[1, 1].set_xlim(0, ANGLE_PLOT_WINDOW)      # visible window = 50 samples
+    ax[1, 1].margins(x=0, y=0)
     ax[1, 1].grid(True, alpha=0.3)
 
     return fig, ax, canvas, emg_line, cop_point, bt_scat, ang_line
@@ -174,16 +166,8 @@ class App:
         self.root.title("Acquisition Systems GUI")
 
         # Controls
-        (
-            self.e_len,
-            self.e_mac,
-            self.e_name,
-            self.append_var,
-            self.ref_var,
-            self.b_start,
-            self.b_save,
-            self.b_quit,
-        ) = create_control_bar(root, self.cfg.emg_mac)
+        (self.e_len, self.e_mac, self.e_name, self.append_var, self.ref_var,
+         self.b_start, self.b_save, self.b_quit) = create_control_bar(root, self.cfg.emg_mac)
         self.b_start.config(command=self.toggle_start)
         self.b_save.config(command=self.save_csv)
         self.b_quit.config(command=self.on_close)
@@ -192,17 +176,10 @@ class App:
         self.status_frame, self.lbl_emg, self.lbl_cop, self.lbl_pose = create_status_bar(root)
 
         # Plots
-        (
-            self.fig,
-            self.ax,
-            self.canvas,
-            self.emg_line,
-            self.cop_point,
-            self.bt_scat,
-            self.ang_line,
-        ) = create_subplots(root, self.cfg.cam_width, self.cfg.cam_height)
+        (self.fig, self.ax, self.canvas,
+         self.emg_line, self.cop_point, self.bt_scat, self.ang_line) = create_subplots(root, self.cfg.cam_width, self.cfg.cam_height)
         self._emg_buf = []  # rolling only for plot
-        self._ang_x, self._ang_y = [], []
+        self._ang_buf = []  # angle rolling buffer
 
         # Recorder
         self.rec = Recorder()
@@ -214,7 +191,6 @@ class App:
         self.running = False
         self.t_start = None
         self.t_stop = 0.0
-
         # Last data timestamps for dynamic ONLINE/OFFLINE
         self._last_emg = None
         self._last_cop = None
@@ -239,48 +215,27 @@ class App:
             for lbl, name in ((self.lbl_emg, "EMG"), (self.lbl_cop, "CoP"), (self.lbl_pose, "Pose")):
                 lbl.config(text=f"{name}: —", fg="gray")
             return
-        self._set_status(
-            self.lbl_emg, "EMG", self.started.emg is not None, self.started.errors.get("emg", "")
-        )
-        self._set_status(
-            self.lbl_cop, "CoP", self.started.cop is not None, self.started.errors.get("cop", "")
-        )
-        self._set_status(
-            self.lbl_pose, "Pose", self.started.pose is not None, self.started.errors.get("pose", "")
-        )
+        self._set_status(self.lbl_emg, "EMG", self.started.emg is not None, self.started.errors.get("emg", ""))
+        self._set_status(self.lbl_cop, "CoP",  self.started.cop is not None, self.started.errors.get("cop", ""))
+        self._set_status(self.lbl_pose, "Pose", self.started.pose is not None, self.started.errors.get("pose", ""))
 
     def _update_dynamic_status(self, now: float, threshold: float = 2.0):
-        """Mark device OFFLINE if no data received within 'threshold' seconds."""
         if not self.started:
             return
         # EMG
-        emg_online = (
-            self.started.emg is not None
-            and self._last_emg is not None
-            and (now - self._last_emg) < threshold
-        )
+        emg_online = self.started.emg is not None and self._last_emg is not None and (now - self._last_emg) < threshold
         emg_msg = "" if self.started.emg else self.started.errors.get("emg", "")
         if self.started.emg and not emg_online:
             emg_msg = "no data"
         self._set_status(self.lbl_emg, "EMG", emg_online if self.started.emg else False, emg_msg)
-
         # CoP
-        cop_online = (
-            self.started.cop is not None
-            and self._last_cop is not None
-            and (now - self._last_cop) < threshold
-        )
+        cop_online = self.started.cop is not None and self._last_cop is not None and (now - self._last_cop) < threshold
         cop_msg = "" if self.started.cop else self.started.errors.get("cop", "")
         if self.started.cop and not cop_online:
             cop_msg = "no data"
         self._set_status(self.lbl_cop, "CoP", cop_online if self.started.cop else False, cop_msg)
-
         # Pose
-        pose_online = (
-            self.started.pose is not None
-            and self._last_pose is not None
-            and (now - self._last_pose) < threshold
-        )
+        pose_online = self.started.pose is not None and self._last_pose is not None and (now - self._last_pose) < threshold
         pose_msg = "" if self.started.pose else self.started.errors.get("pose", "")
         if self.started.pose and not pose_online:
             pose_msg = "no data"
@@ -303,7 +258,7 @@ class App:
             cfg = load_config()
             cfg.emg_mac = mac
 
-            # Start forgiving (works even if 1-2 devices are offline)
+            # Start forgiving
             self.started = start_workers_forgiving(cfg, want_emg=True, want_cop=True, want_pose=True)
 
             # If nothing started, show status and bail
@@ -314,8 +269,7 @@ class App:
 
             # reset plot buffers and timer
             self._emg_buf.clear()
-            self._ang_x.clear()
-            self._ang_y.clear()
+            self._ang_buf.clear()
             self.t_start = time.time()
             self.t_stop = self.t_start + dur
             self.running = True
@@ -355,77 +309,73 @@ class App:
             self.toggle_start()  # stop
             return
 
-        # Get latest samples (or None) without blocking from whichever workers are online
-        emg = get_latest(self.started.emg.queue, default=None) if self.started.emg else None
-        cop = get_latest(self.started.cop.queue, default=None) if self.started.cop else None
-        pose = (
-            get_latest(self.started.pose.landmarks_q, default=None) if self.started.pose else None
-        )
-        ang = get_latest(self.started.pose.angle_q, default=None) if self.started.pose else None
+        # Latest samples
+        emg  = get_latest(self.started.emg.queue,  default=None) if self.started.emg else None
+        cop  = get_latest(self.started.cop.queue,  default=None) if self.started.cop else None
+        pose = get_latest(self.started.pose.landmarks_q, default=None) if self.started.pose else None
+        ang  = get_latest(self.started.pose.angle_q,     default=None) if self.started.pose else None
 
-        # Plot
+        # --- Plot updates ---
+        # EMG (200-sample scrolling window; ymin >= 0 to avoid space below zero)
         if emg:
             self._emg_buf.append(emg.value)
-            # mantenemos un buffer grande para que el eje X pueda desplazarse
             self._emg_buf = self._emg_buf[-EMG_BUF_MAX:]
             x = np.arange(len(self._emg_buf))
             self.emg_line.set_data(x, self._emg_buf)
 
-            # ventana desplazable de 200 muestras
             right = len(self._emg_buf)
             left  = max(0, right - EMG_PLOT_WINDOW)
             self.ax[0, 0].set_xlim(left, left + EMG_PLOT_WINDOW)
 
-            # (opcional) auto-escala suave en Y usando solo la ventana visible
-            if (right - left) >= min(50, EMG_PLOT_WINDOW):  # espera ~50 pts para estabilizar
+            # Auto-ylim suave en la ventana visible (forzar ymin >= 0)
+            if (right - left) >= min(50, EMG_PLOT_WINDOW):
                 arr = np.asarray(self._emg_buf[left:right], dtype=float)
                 lo = float(np.nanpercentile(arr, 1))
                 hi = float(np.nanpercentile(arr, 99))
                 if hi > lo:
                     margin = 0.15 * (hi - lo)
-                    ymin = lo - margin
+                    ymin = max(0.0, lo - margin)   # <-- clamp a 0
                     ymax = hi + margin
-                    if ymax - ymin < 1e-3:  # señal casi plana
-                        ymin -= 0.5
-                        ymax += 0.5
+                    if ymax - ymin < 1e-3:
+                        ymin = 0.0
+                        ymax = max(0.5, ymax)
                     self.ax[0, 0].set_ylim(ymin, ymax)
 
+        # CoP (solo mover el punto dentro de límites reales ya fijados)
         if cop:
             self.cop_point.set_data([cop.x], [cop.y])
 
-        if pose:
-            if pose.landmarks is not None and pose.landmarks.size > 0:
-                self.bt_scat.set_offsets(pose.landmarks)
+        # Pose (px)
+        if pose and pose.landmarks is not None and pose.landmarks.size > 0:
+            self.bt_scat.set_offsets(pose.landmarks)
 
+        # Joint angle (50-sample scrolling window)
         if ang:
-            self._ang_x.append((self._ang_x[-1] + 1) if self._ang_x else 0)
-            self._ang_y.append(ang.deg)
-            self._ang_x = self._ang_x[-900:]
-            self._ang_y = self._ang_y[-900:]
-            self.ang_line.set_data(self._ang_x, self._ang_y)
-            self.ax[1, 1].set_xlim(
-                max(0, (self._ang_x[-1] if self._ang_x else 0) - 900),
-                max(900, (self._ang_x[-1] if self._ang_x else 0) + 10),
-            )
+            self._ang_buf.append(ang.deg)
+            self._ang_buf = self._ang_buf[-ANGLE_BUF_MAX:]
+            ax = self.ax[1, 1]
+            # Dibujar toda la serie para que el scroll sea por índice
+            x = np.arange(len(self._ang_buf))
+            self.ang_line.set_data(x, self._ang_buf)
+            right = len(self._ang_buf)
+            left  = max(0, right - ANGLE_PLOT_WINDOW)
+            ax.set_xlim(left, left + ANGLE_PLOT_WINDOW)
+            # y-limits quedan fijos (-90..90) como referencia de ángulo
 
-        # Native-rate recording
+        # --- Recording (native-rate) ---
         self.rec.push_emg(emg)
         self.rec.push_cop(cop)
         self.rec.push_pose(pose)
         self.rec.push_angle(ang)
 
         # Update last-sample timestamps
-        if emg:
-            self._last_emg = now
-        if cop:
-            self._last_cop = now
-        if pose:
-            self._last_pose = now
+        if emg:  self._last_emg  = now
+        if cop:  self._last_cop  = now
+        if pose: self._last_pose = now
 
         self.canvas.draw_idle()
         # Refresh dynamic status (detect devices that stopped sending)
         self._update_dynamic_status(now)
-        # schedule next frame (~60 Hz)
         self.root.after(16, self._tick)
 
     def _stop_all(self):
