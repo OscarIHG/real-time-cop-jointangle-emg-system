@@ -1,2 +1,1 @@
-ivan@rpi4-deb12:~/Documents/github-repos/real-time-cop-jointangle-emg-system $ /usr/bin/python /home/ivan/Documents/github-repos/real-time-cop-jointangle-emg-system/examples/demo_simulated.py
-[OK] Demo finished (not saved).
+pip show numpy matplotlib opencv-python mediapipe protobuf absl-py attrs pyserial Phidget22 pandas
