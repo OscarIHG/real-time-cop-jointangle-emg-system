@@ -34,6 +34,15 @@ from acquisition_systems.common.runtime import start_workers_forgiving, stop_wor
 from acquisition_systems.common.utils import get_latest
 from acquisition_systems.recorder import Recorder
 
+# Connections between pose landmarks for drawing skeleton lines.  The
+# structure is provided by MediaPipe; if it is unavailable we simply fall
+# back to an empty tuple so the rest of the GUI keeps working without
+# drawing the lines.
+try:  # pragma: no cover - optional dependency
+    from mediapipe.python.solutions.pose import POSE_CONNECTIONS
+except Exception:  # pragma: no cover - gracefully handle missing mediapipe
+    POSE_CONNECTIONS = ()
+
 
 # ---------- output directory helpers ----------
 def get_sessions_dir() -> str:
@@ -131,6 +140,11 @@ def create_subplots(master: tk.Widget, cam_w: int, cam_h: int,
 
     # --- Body tracking (px) with origin at bottom-left ---
     bt_scat = ax[1, 0].scatter([], [], s=12)
+    # Create one Line2D per connection pair to draw the skeleton.  These are
+    # initially empty and updated later in the main loop when new landmarks
+    # arrive.
+    bt_lines = [ax[1, 0].plot([], [], lw=1, color="tab:blue")[0]
+                for _ in POSE_CONNECTIONS]
     ax[1, 0].set_title("Body-Tracking Landmarks [px]")
     ax[1, 0].set_xlabel("x [px]"); ax[1, 0].set_ylabel("y [px]")
     ax[1, 0].set_xlim(0, cam_w)
@@ -148,7 +162,7 @@ def create_subplots(master: tk.Widget, cam_w: int, cam_h: int,
     ax[1, 1].margins(x=0, y=0)
     ax[1, 1].grid(True, alpha=0.3)
 
-    return fig, ax, canvas, emg_line, cop_point, bt_scat, ang_line
+    return fig, ax, canvas, emg_line, cop_point, bt_scat, bt_lines, ang_line
 
 
 # ---------- App ----------
@@ -176,7 +190,7 @@ class App:
 
         # Plots driven by config
         (self.fig, self.ax, self.canvas,
-         self.emg_line, self.cop_point, self.bt_scat, self.ang_line) = create_subplots(
+         self.emg_line, self.cop_point, self.bt_scat, self.bt_lines, self.ang_line) = create_subplots(
             root, self.cfg.cam_width, self.cfg.cam_height,
             self.emg_plot_window, self.angle_plot_window,
             self.cop_x_half, self.cop_y_half
@@ -371,6 +385,15 @@ class App:
                     lm = lm[:, :2]
                 if lm.size > 0:
                     self.bt_scat.set_offsets(lm)
+                    # Update skeleton lines connecting landmark pairs.  Each
+                    # line corresponds to one pair in POSE_CONNECTIONS.
+                    for line, (i, j) in zip(self.bt_lines, POSE_CONNECTIONS):
+                        if i < lm.shape[0] and j < lm.shape[0]:
+                            line.set_data([lm[i, 0], lm[j, 0]],
+                                          [lm[i, 1], lm[j, 1]])
+                        else:
+                            # Landmark index out of range; clear the line.
+                            line.set_data([], [])
 
             # --- Angle (scroll) ---
             if ang:
