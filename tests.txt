@@ -1,18 +1,12 @@
-python - <<'PY'
-import time, os, sys
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)) + "/acquisition_systems/..")
-from acquisition_systems.common.config import load_config
-from acquisition_systems.workers.cop import CoPWorker
-from acquisition_systems.common.utils import get_latest
-
-cfg = load_config()
-w = CoPWorker(cfg.cop_gain, cfg.cop_x_dist_cm, cfg.cop_y_dist_cm, cfg.cop_interval_ms)
-w.start()
-t0 = time.time()
-while time.time() - t0 < 2.0:
-    s = get_latest(w.queue, default=None)
-    if s:
-        print("CoP:", s.x, s.y)
-    time.sleep(0.01)
-w.stop()
-PY
+ivan@rpi4-deb12:~/Documents/github-repos/real-time-cop-jointangle-emg-system $ /usr/bin/python /home/ivan/Documents/github-repos/real-time-cop-jointangle-emg-system/examples/demo_simulated.py
+Exception in thread Thread-2 (_loop):
+Traceback (most recent call last):
+  File "/usr/lib/python3.11/threading.py", line 1038, in _bootstrap_inner
+    self.run()
+  File "/usr/lib/python3.11/threading.py", line 975, in run
+    self._target(*self._args, **self._kwargs)
+  File "/home/ivan/Documents/github-repos/real-time-cop-jointangle-emg-system/examples/demo_simulated.py", line 77, in _loop
+    put_latest(self.queue, CopSample(t=time.perf_counter(), x=float(x), y=float(y)))
+                           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+TypeError: CopSample.__init__() missing 1 required positional argument: 'kg'
+[OK] Demo finished (not saved).
