@@ -8,3 +8,4 @@ attrs>=22
 pyserial>=3.5
 Phidget22>=1.22,<2
 pandas>=1.5,<2.0
+pyyaml>=5.4
