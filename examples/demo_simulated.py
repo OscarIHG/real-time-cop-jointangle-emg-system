@@ -54,10 +54,13 @@ class FakeEMG:
             self._th.join(timeout=1.0)
 
 class FakeCoP:
-    def __init__(self, hz=100, x_half=27.92, y_half=20.32):
+    def __init__(self, hz=100, x_half=27.92, y_half=20.32,
+                 kg_base=75.0, kg_noise=0.8):
         self.hz = hz
         self.xh = x_half
         self.yh = y_half
+        self.kg_base = kg_base     # average body weight to simulate
+        self.kg_noise = kg_noise   # random noise in kg
         self.queue = queue.Queue(maxsize=1)
         self._stop = threading.Event()
         self._th = None
@@ -74,7 +77,15 @@ class FakeCoP:
             # small Lissajous inside plate
             x = 0.7*self.xh * math.sin(0.4*self._t) * math.cos(0.1*self._t)
             y = 0.7*self.yh * math.cos(0.3*self._t) * math.sin(0.07*self._t)
-            put_latest(self.queue, CopSample(t=time.perf_counter(), x=float(x), y=float(y)))
+            # simulate total mass in kg (slow drift + small noise), clamp >= 0
+            kg = self.kg_base + 0.5*math.sin(0.05*self._t) + np.random.normal(0, self.kg_noise)
+            kg = float(max(0.0, kg))
+            put_latest(self.queue, CopSample(
+                t=time.perf_counter(),
+                x=float(x),
+                y=float(y),
+                kg=kg        # <-- ¡este campo faltaba!
+            ))
             self._t += dt
             time.sleep(dt)
 
@@ -82,6 +93,7 @@ class FakeCoP:
         self._stop.set()
         if self._th:
             self._th.join(timeout=1.0)
+
 
 class FakePose:
     def __init__(self, hz=30, w=640, h=480):
