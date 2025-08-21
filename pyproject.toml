@@ -1,3 +1,16 @@
-[build-system]
-requires = ["setuptools>=68", "wheel"]
-build-backend = "setuptools.build_meta"
+[options]
+packages = find:
+python_requires = >=3.8, <3.9
+include_package_data = True
+# Esta lista ahora coincide con la realidad de tu proyecto
+install_requires =
+    numpy==1.24.4
+    pandas>=1.5,<2.0
+    matplotlib<3.9
+    pyyaml>=5.4
+    Phidget22>=1.22,<2
+    pybluez
+    pyserial>=3.5
+    opencv-python==4.8.0.74
+    protobuf==3.20.3
+    mediapipe-aarch64==0.8.10.1
