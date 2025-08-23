@@ -20,7 +20,7 @@ import numpy as np
 
 try:
     import cv2
-    import mediapipe as mp
+    import mediapipe-rpi4 as mp
 except Exception as e:
     cv2 = None
     mp = None
