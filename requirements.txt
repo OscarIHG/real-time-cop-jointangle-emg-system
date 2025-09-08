@@ -1,27 +1,15 @@
-# --- CORE LIBRARIES ---
-# Numpy fijado a una versión compatible con OpenCV y MediaPipe en ARM64
-numpy==1.24.4
-pandas>=1.5,<2.0
-matplotlib<3.9
-pyyaml>=5.4
-
-# --- HARDWARE INTERFACES ---
-# Para la plataforma de fuerza Phidget (cop.py)
-Phidget22>=1.22,<2
-# Para la comunicación Bluetooth del EMG (emg.py)
+# Basado en tu setup.cfg pero ELIMINANDO mediapipe y sus dependencias conflictivas
+numpy
+pandas
+matplotlib
+pyyaml
 pybluez
-# Dependencia común para comunicación serial
-pyserial>=3.5
+pyserial
+Phidget22
+opencv-contrib-python
 
-# --- COMPUTER VISION STACK (CRÍTICO) ---
-# OpenCV
-opencv-python==4.8.0.74
-# Protobuf fijado a una versión compatible con MediaPipe 0.8.x
-protobuf==3.20.3
-# La versión correcta de MediaPipe para Raspberry Pi 64-bits (aarch64) y Python 3.8
-mediapipe-aarch64==0.8.10.1
-
-# --- DEPENDENCIAS DE MEDIAPIPE ---
-# Es bueno incluirlas explícitamente para asegurar la compatibilidad
-absl-py>=1.0
-attrs>=22
+# --- REEMPLAZO DE MEDIAPIPE ---
+# Este es el runtime oficial de TFLite para Python.
+# En Raspberry Pi OS (Bullseye/Bookworm), puedes instalarlo así:
+# pip install tflite-runtime
+tflite-runtime
