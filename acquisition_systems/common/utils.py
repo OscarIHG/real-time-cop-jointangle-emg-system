@@ -35,13 +35,19 @@ def get_latest(q: queue.Queue, default=None):
 
 def pelvic_obliquity_deg_from_landmarks(landmarks_px: np.ndarray) -> float:
     """
-    Compute angle of vector 23->24 relative to +x, with y up (invert image y).
+    Compute angle of vector (Hip 11 -> Hip 12) relative to +x, with y up (invert image y).
+    Utiliza el formato MoveNet (17 keypoints), donde 11=L_Hip y 12=R_Hip.
     Normalize to [-90, 90] for tilt-like interpretation.
     """
-    if landmarks_px is None or landmarks_px.shape[0] <= 24:
+    # MoveNet tiene 17 landmarks. Necesitamos hasta el índice 12.
+    if landmarks_px is None or landmarks_px.shape[0] <= 12:
         return float("nan")
-    xL, yL = landmarks_px[23, 0], landmarks_px[23, 1]
-    xR, yR = landmarks_px[24, 0], landmarks_px[24, 1]
+    
+    # Índices de MoveNet para Caderas: 11 = Izquierda, 12 = Derecha
+    # Los landmarks_px entrantes deben tener formato [x, y]
+    xL, yL = landmarks_px[11, 0], landmarks_px[11, 1]
+    xR, yR = landmarks_px[12, 0], landmarks_px[12, 1]
+
     vx = xR - xL
     vy = -(yR - yL)  # convert image y (down) to Cartesian y (up)
     ang = math.degrees(math.atan2(vy, vx))  # range (-180, 180]
