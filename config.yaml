@@ -1,4 +1,8 @@
-# System configuration (e.g. hardware parameters)
+# =============================================================================
+# CONFIGURACIÓN DEL SISTEMA - REAL-TIME COP-JOINTANGLE-EMG
+# Optimizado para MediaPipe - Sin TensorFlow Lite
+# =============================================================================
+
 # --- EMG (ESP32 over RFCOMM) ---
 emg_mac: "A4:CF:12:96:8B:9E"
 emg_rfcomm_channel: 1
@@ -22,12 +26,34 @@ cop_flip_x: false
 cop_flip_y: true   # set to true so that "up" is positive
 cop_swap_xy: false
 
-# --- Pose / Camera ---
+# --- Pose / Camera (MediaPipe Optimizations) ---
 cam_index: 0
 cam_width: 640
 cam_height: 480
 cam_fps: 30
 
+# MediaPipe Pose Configuration
+mediapipe_model_complexity: 1      # 0=Lite, 1=Full, 2=Heavy (recomendado: 1)
+mediapipe_min_detection_confidence: 0.5
+mediapipe_min_tracking_confidence: 0.5
+mediapipe_smooth_landmarks: true
+mediapipe_smooth_segmentation: false  # Para mejor rendimiento
+mediapipe_static_image_mode: false   # Para video en tiempo real
+
+# Joint Angle Calculation (MediaPipe landmarks)
+joint_angle_landmarks: [23, 24]    # Hip landmarks for pelvic obliquity
+joint_angle_method: "vector_angle"  # método de cálculo
+
 # --- Plot windows (GUI) ---
 emg_plot_window: 200        # visible samples in the EMG plot
 angle_plot_window: 50       # visible samples in the angle plot
+
+# --- Performance Optimizations ---
+# Reduce processing for better real-time performance
+gui_update_interval_ms: 16  # ~60 FPS GUI updates
+worker_queue_maxsize: 100   # Prevent memory buildup
+recording_buffer_size: 10000  # Samples to keep in memory
+
+# Debug flags
+debug_pose_landmarks: false  # Set true to print landmark coordinates
+debug_timing: false          # Set true to print processing times
