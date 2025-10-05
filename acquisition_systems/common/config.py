@@ -144,21 +144,21 @@ def config_to_dict(config: Config) -> ConfigDict:
         'cop_x_half_range_cm': config.cop_x_half_range_cm,
         'cop_y_half_range_cm': config.cop_y_half_range_cm,
         'cop_interval_ms': config.cop_interval_ms,
-        # Camera / Pose
+        # Camera / Pose - OPTIMIZED DEFAULTS
         'cam_index': config.cam_index,
-        'cam_width': config.cam_width,
-        'cam_height': config.cam_height,
-        'cam_fps': config.cam_fps,
+        'cam_width': getattr(config, 'cam_width', 480),   # Reduced from 640
+        'cam_height': getattr(config, 'cam_height', 360), # Reduced from 480  
+        'cam_fps': getattr(config, 'cam_fps', 20),        # Reduced from 30
         # Plot
         'emg_plot_window': config.emg_plot_window,
         'angle_plot_window': config.angle_plot_window,
-        # MediaPipe defaults
-        'mediapipe_model_complexity': 1,
-        'mediapipe_min_detection_confidence': 0.5,
+        # MediaPipe defaults - PERFORMANCE OPTIMIZED
+        'mediapipe_model_complexity': 0,              # REDUCED: 0=fast, 2=accurate
+        'mediapipe_min_detection_confidence': 0.7,    # INCREASED for reliability
         'mediapipe_min_tracking_confidence': 0.5,
         'mediapipe_smooth_landmarks': True,
+        'mediapipe_enable_segmentation': False,       # DISABLED for performance
         'mediapipe_smooth_segmentation': False,
-        'mediapipe_static_image_mode': False,
     }
 
 # Función para cargar config como diccionario (compatibilidad)
