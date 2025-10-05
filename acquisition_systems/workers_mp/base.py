@@ -25,7 +25,7 @@ import numpy as np
 from abc import ABC, abstractmethod
 from typing import Optional, Any, Dict, Tuple
 import os
-import signal
+# REMOVED: import signal - causes issues in worker processes
 
 
 class SharedBuffer:
@@ -139,14 +139,9 @@ class BaseWorkerMP(ABC):
             'last_update': time.perf_counter()
         }
         
-        # Setup signal handling for graceful shutdown
-        signal.signal(signal.SIGTERM, self._signal_handler)
-        signal.signal(signal.SIGINT, self._signal_handler)
-    
-    def _signal_handler(self, signum, frame):
-        """Handle termination signals gracefully."""
-        print(f"[{self.name}] Received signal {signum}, shutting down...")
-        self.stop()
+        # REMOVED: Signal handlers setup - this was causing the multiprocessing error
+        # Signal handlers should only be set up in the main process
+        # Individual workers will handle shutdown via stop_event
     
     def create_shared_buffer(self, name: str, size: int, dtype=np.float32) -> SharedBuffer:
         """Create a shared memory buffer for data exchange."""
