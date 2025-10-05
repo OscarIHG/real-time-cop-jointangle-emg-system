@@ -102,7 +102,6 @@ def load_config() -> Config:
     cfg.cop_y_dist_cm = float(y_dist) if y_dist is not None else 2.0 * float(y_half)
     cfg.cop_interval_ms = int(data.get("cop_interval_ms", cfg.cop_interval_ms))
 
-
     # Camera / Pose
     cfg.cam_index = int(data.get("cam_index", cfg.cam_index))
     cfg.cam_width = int(data.get("cam_width", cfg.cam_width))
@@ -114,3 +113,56 @@ def load_config() -> Config:
     cfg.angle_plot_window = int(data.get("angle_plot_window", cfg.angle_plot_window))
 
     return cfg
+
+
+# =============================================================================
+# AGREGADO PARA SOLUCIONAR EL ERROR DE IMPORTACIÓN
+# =============================================================================
+
+# Type alias para compatibilidad con código existente
+ConfigDict = Dict[str, Any]
+
+# Función helper para convertir Config a diccionario
+def config_to_dict(config: Config) -> ConfigDict:
+    """Convierte objeto Config a diccionario para compatibilidad."""
+    return {
+        # EMG
+        'emg_mac': config.emg_mac,
+        'emg_rfcomm_channel': config.emg_rfcomm_channel,
+        'emg_vmin': config.emg_vmin,
+        'emg_vmax': config.emg_vmax,
+        'emg_allow_lf': config.emg_allow_lf,
+        'emg_start_token': config.emg_start_token,
+        'emg_stop_token': config.emg_stop_token,
+        'cop_flip_x': config.cop_flip_x,
+        'cop_flip_y': config.cop_flip_y,
+        'cop_swap_xy': config.cop_swap_xy,
+        # CoP
+        'cop_gain': config.cop_gain,
+        'cop_x_dist_cm': config.cop_x_dist_cm,
+        'cop_y_dist_cm': config.cop_y_dist_cm,
+        'cop_x_half_range_cm': config.cop_x_half_range_cm,
+        'cop_y_half_range_cm': config.cop_y_half_range_cm,
+        'cop_interval_ms': config.cop_interval_ms,
+        # Camera / Pose
+        'cam_index': config.cam_index,
+        'cam_width': config.cam_width,
+        'cam_height': config.cam_height,
+        'cam_fps': config.cam_fps,
+        # Plot
+        'emg_plot_window': config.emg_plot_window,
+        'angle_plot_window': config.angle_plot_window,
+        # MediaPipe defaults
+        'mediapipe_model_complexity': 1,
+        'mediapipe_min_detection_confidence': 0.5,
+        'mediapipe_min_tracking_confidence': 0.5,
+        'mediapipe_smooth_landmarks': True,
+        'mediapipe_smooth_segmentation': False,
+        'mediapipe_static_image_mode': False,
+    }
+
+# Función para cargar config como diccionario (compatibilidad)
+def load_config_dict() -> ConfigDict:
+    """Carga configuración como diccionario para compatibilidad con código existente."""
+    config = load_config()
+    return config_to_dict(config)
