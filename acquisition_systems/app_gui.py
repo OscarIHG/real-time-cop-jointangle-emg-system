@@ -4,7 +4,7 @@ Tkinter + Matplotlib GUI orchestrating EMG, CoP, Pose workers with:
 - Graceful degradation if some devices are offline.
 - Status bar (ONLINE/OFFLINE) per device.
 - Merged CSV saving with selectable reference stream.
-- Append auto suffix option.
+- Configuration driven from config.yaml for maximum simplicity.
 - Plots driven by config.yaml:
     * EMG: window (samples) from cfg.emg_plot_window; ymin>=0.
     * CoP: ranges from cfg.cop_x_half_range_cm / cfg.cop_y_half_range_cm.
@@ -69,28 +69,14 @@ def create_control_bar(master: tk.Widget):
 
     # Filename
     tk.Label(frame, text="Filename:").pack(side=tk.LEFT, padx=(20, 5))
-    e_name = tk.Entry(frame, width=22); e_name.insert(0, ""); e_name.pack(side=tk.LEFT)
+    e_name = tk.Entry(frame, width=25); e_name.insert(0, ""); e_name.pack(side=tk.LEFT)
 
-    # Append suffix
-    append_var = tk.BooleanVar(value=False)
-    cb_append = tk.Checkbutton(frame, text="Append auto suffix", variable=append_var)
-    cb_append.pack(side=tk.LEFT, padx=8)
-
-    # Reference selector
-    tk.Label(frame, text="Reference:").pack(side=tk.LEFT, padx=(20, 5))
-    ref_var = tk.StringVar(value="auto")
-    ref_combo = ttk.Combobox(frame, textvariable=ref_var,
-                             values=("auto", "emg", "cop", "pose", "angle"),
-                             width=7, state="readonly")
-    ref_combo.pack(side=tk.LEFT)
-
-    # Buttons
+    # Buttons - only Start and Save CSV
     b_start = tk.Button(frame, text="Start"); b_start.pack(side=tk.LEFT, padx=8)
     b_save  = tk.Button(frame, text="Save CSV"); b_save.pack(side=tk.LEFT, padx=8)
-    b_quit  = tk.Button(frame, text="Quit"); b_quit.pack(side=tk.LEFT, padx=8)
 
     frame.pack(fill="x", padx=10, pady=6)
-    return e_len, e_name, append_var, ref_var, b_start, b_save, b_quit
+    return e_len, e_name, b_start, b_save
 
 
 def create_status_bar(master: tk.Widget):
@@ -174,12 +160,10 @@ class App:
         self.cop_x_half = float(self.cfg.cop_x_half_range_cm)
         self.cop_y_half = float(self.cfg.cop_y_half_range_cm)
 
-        # Controls (removed e_mac from the return tuple)
-        (self.e_len, self.e_name, self.append_var, self.ref_var,
-         self.b_start, self.b_save, self.b_quit) = create_control_bar(root)
+        # Controls - simplified (removed append_var and ref_var)
+        (self.e_len, self.e_name, self.b_start, self.b_save) = create_control_bar(root)
         self.b_start.config(command=self.toggle_start)
         self.b_save.config(command=self.save_csv)
-        self.b_quit.config(command=self.on_close)
 
         # Status bar
         self.status_frame, self.lbl_emg, self.lbl_cop, self.lbl_pose = create_status_bar(root)
@@ -296,8 +280,9 @@ class App:
 
     def save_csv(self):
         base = (self.e_name.get() or "").strip()
-        append = bool(self.append_var.get())
-        ref = (self.ref_var.get() or "auto").lower()
+        # Use configuration from YAML
+        append = bool(getattr(self.cfg, 'append_auto_suffix', False))
+        ref = getattr(self.cfg, 'reference_stream', 'auto').lower()
 
         if not base:
             base = f"session_{self._auto_suffix()}"
