@@ -1,15 +1,45 @@
-# Basado en tu setup.cfg pero ELIMINANDO mediapipe y sus dependencias conflictivas
-numpy
-pandas
-matplotlib
-pyyaml
-pybluez
-pyserial
-Phidget22
-opencv-contrib-python
+# =============================================================================
+# REQUIREMENTS UNIFICADOS - REAL-TIME COP-JOINTANGLE-EMG SYSTEM
+# Versiones específicas compatibles - No más conflictos
+# USAR: chmod +x setup.sh && ./setup.sh (RECOMENDADO)
+# =============================================================================
 
-# --- REEMPLAZO DE MEDIAPIPE ---
-# Este es el runtime oficial de TFLite para Python.
-# En Raspberry Pi OS (Bullseye/Bookworm), puedes instalarlo así:
-# pip install tflite-runtime
-tflite-runtime
+# Base científica estable
+numpy==1.26.4
+scipy==1.11.4
+pandas==2.0.3
+python-dateutil>=2.7
+pytz
+
+# Visualización compatible
+contourpy==1.1.1
+matplotlib==3.7.3
+cycler>=0.10
+fonttools>=4.22.0
+kiwisolver>=1.0.1
+pyparsing>=2.3.1
+pillow
+
+# Visión por computadora - MediaPipe en lugar de TensorFlow Lite
+opencv-contrib-python==4.8.1.78
+protobuf>=3.11,<4
+mediapipe==0.10.9
+attrs>=19.1.0
+flatbuffers>=2.0
+absl-py
+soundevice
+
+# Hardware interfaces
+Phidget22>=1.20.0
+CFFI>=1.16.0
+pyserial>=3.0
+
+# Configuración y GUI
+PyYAML>=5.0
+# tkinter viene incluido con Python
+
+# NOTA IMPORTANTE SOBRE PyBluez:
+# PyBluez tiene problemas de compilación en Python 3.11+
+# El script setup.sh lo configura automáticamente usando enlaces simbólicos
+# al paquete del sistema python3-bluez
+# NO instalar pybluez via pip - usar setup.sh
