@@ -5,6 +5,7 @@ Tkinter + Matplotlib GUI orchestrating EMG, CoP, Pose workers with:
 - Status bar (ONLINE/OFFLINE) per device.
 - Merged CSV saving with selectable reference stream.
 - Configuration driven from config.yaml for maximum simplicity.
+- PERFORMANCE OPTIMIZED for real-time data acquisition.
 - Plots driven by config.yaml:
     * EMG: window (samples) from cfg.emg_plot_window; ymin>=0.
     * CoP: ranges from cfg.cop_x_half_range_cm / cfg.cop_y_half_range_cm.
@@ -85,10 +86,12 @@ def create_status_bar(master: tk.Widget):
     emg = tk.Label(frame, text="EMG: —", fg="gray")
     cop = tk.Label(frame, text="CoP: —",  fg="gray")
     pose = tk.Label(frame, text="Pose: —", fg="gray")
-    for w in (emg, cop, pose):
+    # Add performance counter
+    perf = tk.Label(frame, text="GUI: 0 fps", fg="blue")
+    for w in (emg, cop, pose, perf):
         w.pack(side=tk.LEFT, padx=12)
     frame.pack(fill="x", padx=10, pady=(0,6))
-    return frame, emg, cop, pose
+    return frame, emg, cop, pose, perf
 
 
 def create_subplots(master: tk.Widget, cam_w: int, cam_h: int,
@@ -166,8 +169,8 @@ class App:
         self.b_start.config(command=self.toggle_start)
         self.b_save.config(command=self.save_csv)
 
-        # Status bar
-        self.status_frame, self.lbl_emg, self.lbl_cop, self.lbl_pose = create_status_bar(root)
+        # Status bar with performance counter
+        self.status_frame, self.lbl_emg, self.lbl_cop, self.lbl_pose, self.lbl_perf = create_status_bar(root)
 
         # Plots driven by config
         (self.fig, self.ax, self.canvas,
@@ -196,6 +199,15 @@ class App:
         
         # Track if we're in the closing process
         self._closing = False
+        
+        # Performance optimization counters
+        self._frame_count = 0
+        self._last_perf_time = time.perf_counter()
+        self._plot_skip_counter = 0  # Skip every N frames for plot updates
+        
+        # Cache for plot optimization
+        self._last_emg_update = 0
+        self._last_pose_update = 0
 
         # Set up proper close handling
         self.root.protocol("WM_DELETE_WINDOW", self.on_close)
@@ -243,6 +255,15 @@ class App:
             pose_msg = "no data"
         self._set_status(self.lbl_pose, "Pose", pose_online if self.started.pose else False, pose_msg)
 
+    def _update_performance_counter(self, now: float):
+        """Update GUI performance counter."""
+        self._frame_count += 1
+        if now - self._last_perf_time >= 2.0:  # Update every 2 seconds
+            fps = self._frame_count / (now - self._last_perf_time)
+            self.lbl_perf.config(text=f"GUI: {fps:.1f} fps")
+            self._frame_count = 0
+            self._last_perf_time = now
+
     # ----- UI actions -----
     def toggle_start(self):
         if not self.running:
@@ -272,6 +293,11 @@ class App:
             self.t_stop = self.t_start + dur
             self.running = True
             self.b_start.config(text="Stop")
+            
+            # Reset performance counters
+            self._frame_count = 0
+            self._last_perf_time = time.perf_counter()
+            self._plot_skip_counter = 0
 
             # Update status bar
             self._refresh_status_labels()
@@ -305,8 +331,8 @@ class App:
         if self._closing or not self.running or self.started is None:
             return
             
-        now = time.time()
-        if now >= self.t_stop:
+        now = time.perf_counter()
+        if time.time() >= self.t_stop:
             self.toggle_start()  # Stop
             return
 
@@ -317,100 +343,119 @@ class App:
             pose = get_latest(self.started.pose.landmarks_q, default=None) if self.started.pose else None
             ang  = get_latest(self.started.pose.angle_q,     default=None) if self.started.pose else None
 
-            # --- EMG plot (same as before) ---
+            # PERFORMANCE OPTIMIZATION: Skip plot updates every other frame
+            self._plot_skip_counter += 1
+            should_update_plots = (self._plot_skip_counter % 2 == 0)
+
+            # Always record data, but update plots less frequently
+            needs_redraw = False
+
+            # --- EMG plot (optimized) ---
             if emg:
                 self._emg_buf.append(emg.value)
                 buf_max = max(self.emg_plot_window * 25, 2000)
                 self._emg_buf = self._emg_buf[-buf_max:]
-                x = np.arange(len(self._emg_buf))
-                self.emg_line.set_data(x, self._emg_buf)
+                
+                if should_update_plots:
+                    x = np.arange(len(self._emg_buf))
+                    self.emg_line.set_data(x, self._emg_buf)
 
-                right = len(self._emg_buf)
-                left  = max(0, right - self.emg_plot_window)
-                self.ax[0, 0].set_xlim(left, left + self.emg_plot_window)
+                    right = len(self._emg_buf)
+                    left  = max(0, right - self.emg_plot_window)
+                    self.ax[0, 0].set_xlim(left, left + self.emg_plot_window)
 
-                if (right - left) >= min(50, self.emg_plot_window):
-                    arr = np.asarray(self._emg_buf[left:right], dtype=float)
-                    lo = float(np.nanpercentile(arr, 1))
-                    hi = float(np.nanpercentile(arr, 99))
-                    if hi > lo:
-                        margin = 0.15 * (hi - lo)
-                        ymin = max(0.0, lo - margin)
-                        ymax = hi + margin
-                        if ymax - ymin < 1e-3:
-                            ymin = 0.0
-                            ymax = max(0.5, ymax)
-                        self.ax[0, 0].set_ylim(ymin, ymax)
+                    # Only update ylim occasionally to reduce overhead
+                    if (right - left) >= min(50, self.emg_plot_window) and self._plot_skip_counter % 10 == 0:
+                        arr = np.asarray(self._emg_buf[left:right], dtype=float)
+                        if len(arr) > 0:
+                            lo = float(np.nanpercentile(arr, 1))
+                            hi = float(np.nanpercentile(arr, 99))
+                            if hi > lo:
+                                margin = 0.15 * (hi - lo)
+                                ymin = max(0.0, lo - margin)
+                                ymax = hi + margin
+                                if ymax - ymin < 1e-3:
+                                    ymin = 0.0
+                                    ymax = max(0.5, ymax)
+                                self.ax[0, 0].set_ylim(ymin, ymax)
+                    needs_redraw = True
 
             # --- CoP: ensure sequences of length one ---
-            if cop:
+            if cop and should_update_plots:
                 try:
                     x_val = float(cop.x)
                     y_val = float(cop.y)
-                    # set_data requires sequences; avoid passing scalars
                     self.cop_point.set_data([x_val], [y_val])
+                    needs_redraw = True
                 except Exception:
                     print("[CoP] Bad sample:", cop)
-                    raise
 
-            # --- Pose (landmarks Nx2) ---
-            if pose and getattr(pose, "landmarks", None) is not None:
+            # --- Pose (landmarks Nx2) - optimized ---
+            if pose and should_update_plots and getattr(pose, "landmarks", None) is not None:
                 lm = pose.landmarks
                 lm = np.asarray(lm)
                 # Ensure shape (N, 2)
                 if lm.ndim == 1:
-                    # Might arrive as flat list [x0, y0, x1, y1, ...]
                     if lm.size % 2 == 0:
                         lm = lm.reshape(-1, 2)
                     else:
-                        lm = lm[: (lm.size // 2) * 2].reshape(-1, 2)  # drop last element if odd
+                        lm = lm[: (lm.size // 2) * 2].reshape(-1, 2)
                 elif lm.ndim == 2 and lm.shape[1] != 2:
-                    # If shaped NxK, take the first two columns
                     lm = lm[:, :2]
+                    
                 if lm.size > 0:
                     self.bt_scat.set_offsets(lm)
-                    # Update skeleton lines connecting landmark pairs.  Each
-                    # line corresponds to one pair in POSE_CONNECTIONS.
-                    for line, (i, j) in zip(self.bt_lines, POSE_CONNECTIONS):
-                        if i < lm.shape[0] and j < lm.shape[0]:
-                            line.set_data([lm[i, 0], lm[j, 0]],
-                                          [lm[i, 1], lm[j, 1]])
-                        else:
-                            # Landmark index out of range; clear the line.
-                            line.set_data([], [])
+                    
+                    # OPTIMIZATION: Only update skeleton lines every 3rd frame
+                    if self._plot_skip_counter % 3 == 0:
+                        for line, (i, j) in zip(self.bt_lines, POSE_CONNECTIONS):
+                            if i < lm.shape[0] and j < lm.shape[0]:
+                                line.set_data([lm[i, 0], lm[j, 0]],
+                                              [lm[i, 1], lm[j, 1]])
+                            else:
+                                line.set_data([], [])
+                    needs_redraw = True
 
-            # --- Angle (scroll) ---
+            # --- Angle (scroll) - optimized ---
             if ang:
                 self._ang_buf.append(ang.deg)
                 buf_max = max(self.angle_plot_window * 40, 2000)
                 self._ang_buf = self._ang_buf[-buf_max:]
-                x = np.arange(len(self._ang_buf))
-                self.ang_line.set_data(x, self._ang_buf)
-                right = len(self._ang_buf)
-                left  = max(0, right - self.angle_plot_window)
-                self.ax[1, 1].set_xlim(left, left + self.angle_plot_window)
+                
+                if should_update_plots:
+                    x = np.arange(len(self._ang_buf))
+                    self.ang_line.set_data(x, self._ang_buf)
+                    right = len(self._ang_buf)
+                    left  = max(0, right - self.angle_plot_window)
+                    self.ax[1, 1].set_xlim(left, left + self.angle_plot_window)
+                    needs_redraw = True
 
-            # --- Recording ---
+            # --- Recording (always do this) ---
             self.rec.push_emg(emg)
             self.rec.push_cop(cop)
             self.rec.push_pose(pose)
             self.rec.push_angle(ang)
 
             # ONLINE/OFFLINE timestamps
-            if emg:  self._last_emg  = now
-            if cop:  self._last_cop  = now
-            if pose: self._last_pose = now
+            if emg:  self._last_emg  = time.time()
+            if cop:  self._last_cop  = time.time()
+            if pose: self._last_pose = time.time()
 
-            self.canvas.draw_idle()
-            self._update_dynamic_status(now)
+            # Only redraw when necessary
+            if needs_redraw and should_update_plots:
+                self.canvas.draw_idle()
+            
+            # Update status and performance counters
+            self._update_dynamic_status(time.time())
+            self._update_performance_counter(now)
+            
         except Exception:
-            # Prevent a bad sample from crashing the loop
             print("[GUI] Tick error:")
             traceback.print_exc()
 
-        # Only schedule next tick if not closing
+        # PERFORMANCE: Reduced update frequency from 16ms to 33ms (30 FPS instead of 60)
         if not self._closing:
-            self.root.after(16, self._tick)
+            self.root.after(33, self._tick)
 
     def _stop_all(self):
         """Stop all workers and clean up resources."""
