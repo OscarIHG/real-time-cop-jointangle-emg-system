@@ -44,6 +44,11 @@ mediapipe_static_image_mode: false   # Para video en tiempo real
 joint_angle_landmarks: [23, 24]    # Hip landmarks for pelvic obliquity
 joint_angle_method: "vector_angle"  # método de cálculo
 
+# --- GUI Configuration ---
+# CSV Export Settings
+append_auto_suffix: false    # Automatically append timestamp suffix to filenames
+reference_stream: "auto"     # Reference stream for CSV sync: "auto", "emg", "cop", "pose", "angle"
+
 # --- Plot windows (GUI) ---
 emg_plot_window: 200        # visible samples in the EMG plot
 angle_plot_window: 50       # visible samples in the angle plot
