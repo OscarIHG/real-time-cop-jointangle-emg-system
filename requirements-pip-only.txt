@@ -1,4 +1,0 @@
-pybluez
-pyserial
-Phidget22
-tflite-runtime 
