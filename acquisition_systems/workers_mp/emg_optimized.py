@@ -24,8 +24,7 @@ import re
 from collections import deque
 
 from .base import BaseWorkerMP
-from acquisition_systems.common.types import EmgSample           
-
+from acquisition_systems.common.types import EmgSample
 
 
 class OptimizedEMGWorker(BaseWorkerMP):
@@ -254,7 +253,7 @@ class OptimizedEMGWorker(BaseWorkerMP):
                 
                 if emg_value is not None:
                     # Create sample
-                    sample = EmgSample           (t=time.perf_counter(), value=emg_value)
+                    sample = EmgSample(t=time.perf_counter(), value=emg_value)
                     
                     # Send to output queue (non-blocking)
                     try:
@@ -309,7 +308,7 @@ class OptimizedEMGWorker(BaseWorkerMP):
         
         print(f"[EMGOptimized] Cleanup complete")
     
-    def get_latest_sample(self) -> Optional[EmgSample           ]:
+    def get_latest_sample(self) -> Optional[EmgSample]:
         """Get the latest EMG sample (non-blocking)."""
         try:
             return self.output_queue.get_nowait()
