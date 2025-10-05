@@ -60,16 +60,12 @@ def dated_subdir(base: str) -> str:
 
 
 # ---------- UI builders ----------
-def create_control_bar(master: tk.Widget, default_mac: str):
+def create_control_bar(master: tk.Widget):
     frame = tk.Frame(master)
 
     # Duration
     tk.Label(frame, text="Duration (s):").pack(side=tk.LEFT, padx=5)
     e_len = tk.Entry(frame, width=6); e_len.insert(0, "20"); e_len.pack(side=tk.LEFT)
-
-    # EMG MAC
-    tk.Label(frame, text="EMG MAC:").pack(side=tk.LEFT, padx=(20, 5))
-    e_mac = tk.Entry(frame, width=17); e_mac.insert(0, default_mac); e_mac.pack(side=tk.LEFT)
 
     # Filename
     tk.Label(frame, text="Filename:").pack(side=tk.LEFT, padx=(20, 5))
@@ -94,7 +90,7 @@ def create_control_bar(master: tk.Widget, default_mac: str):
     b_quit  = tk.Button(frame, text="Quit"); b_quit.pack(side=tk.LEFT, padx=8)
 
     frame.pack(fill="x", padx=10, pady=6)
-    return e_len, e_mac, e_name, append_var, ref_var, b_start, b_save, b_quit
+    return e_len, e_name, append_var, ref_var, b_start, b_save, b_quit
 
 
 def create_status_bar(master: tk.Widget):
@@ -178,9 +174,9 @@ class App:
         self.cop_x_half = float(self.cfg.cop_x_half_range_cm)
         self.cop_y_half = float(self.cfg.cop_y_half_range_cm)
 
-        # Controls
-        (self.e_len, self.e_mac, self.e_name, self.append_var, self.ref_var,
-         self.b_start, self.b_save, self.b_quit) = create_control_bar(root, self.cfg.emg_mac)
+        # Controls (removed e_mac from the return tuple)
+        (self.e_len, self.e_name, self.append_var, self.ref_var,
+         self.b_start, self.b_save, self.b_quit) = create_control_bar(root)
         self.b_start.config(command=self.toggle_start)
         self.b_save.config(command=self.save_csv)
         self.b_quit.config(command=self.on_close)
@@ -268,12 +264,8 @@ class App:
                 dur = 20.0
             dur = max(1.0, dur)
 
-            # Override EMG MAC
-            mac = (self.e_mac.get() or "").strip() or self.cfg.emg_mac
-
-            # Load config copy with overridden MAC
+            # Use EMG MAC directly from config.yaml
             cfg = load_config()
-            cfg.emg_mac = mac
 
             # Start workers in forgiving mode
             self.started = start_workers_forgiving(cfg, want_emg=True, want_cop=True, want_pose=True)
