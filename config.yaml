@@ -1,6 +1,6 @@
 # =============================================================================
 # CONFIGURACIÓN DEL SISTEMA - REAL-TIME COP-JOINTANGLE-EMG
-# Optimizado para MediaPipe - Sin TensorFlow Lite
+# Optimizado para MediaPipe - PERFORMANCE OPTIMIZED
 # =============================================================================
 
 # --- EMG (ESP32 over RFCOMM) ---
@@ -20,7 +20,7 @@ cop_y_dist_cm: 40.64        # total height (2 * 20.32)
 # Plot ranges (half values):
 cop_x_half_range_cm: 27.92  # ±27.92 cm along X (GUI)
 cop_y_half_range_cm: 20.32  # ±20.32 cm along Y (GUI)
-cop_interval_ms: 10         # ~100 Hz
+cop_interval_ms: 20         # OPTIMIZED: 50 Hz instead of 100 Hz for better performance
 # Orientation flags
 cop_flip_x: false
 cop_flip_y: true   # set to true so that "up" is positive
@@ -32,13 +32,13 @@ cam_width: 640
 cam_height: 480
 cam_fps: 30
 
-# MediaPipe Pose Configuration
-mediapipe_model_complexity: 1      # 0=Lite, 1=Full, 2=Heavy (recomendado: 1)
-mediapipe_min_detection_confidence: 0.5
+# MediaPipe Pose Configuration - PERFORMANCE OPTIMIZED
+mediapipe_model_complexity: 0        # OPTIMIZED: 0=Fastest (was 1)
+mediapipe_min_detection_confidence: 0.7  # Slightly higher for stability
 mediapipe_min_tracking_confidence: 0.5
 mediapipe_smooth_landmarks: true
-mediapipe_smooth_segmentation: false  # Para mejor rendimiento
-mediapipe_static_image_mode: false   # Para video en tiempo real
+mediapipe_smooth_segmentation: false    # Para mejor rendimiento
+mediapipe_static_image_mode: false     # Para video en tiempo real
 
 # Joint Angle Calculation (MediaPipe landmarks)
 joint_angle_landmarks: [23, 24]    # Hip landmarks for pelvic obliquity
@@ -50,14 +50,14 @@ append_auto_suffix: false    # Automatically append timestamp suffix to filename
 reference_stream: "auto"     # Reference stream for CSV sync: "auto", "emg", "cop", "pose", "angle"
 
 # --- Plot windows (GUI) ---
-emg_plot_window: 200        # visible samples in the EMG plot
-angle_plot_window: 50       # visible samples in the angle plot
+emg_plot_window: 150        # OPTIMIZED: Reduced from 200 for better performance
+angle_plot_window: 40       # OPTIMIZED: Reduced from 50 for better performance
 
 # --- Performance Optimizations ---
-# Reduce processing for better real-time performance
-gui_update_interval_ms: 16  # ~60 FPS GUI updates
-worker_queue_maxsize: 100   # Prevent memory buildup
-recording_buffer_size: 10000  # Samples to keep in memory
+# PERFORMANCE TUNED for real-time data acquisition
+gui_update_interval_ms: 33   # OPTIMIZED: 30 FPS (was 16ms for 60fps) - reduces GUI overhead
+worker_queue_maxsize: 50     # OPTIMIZED: Reduced from 100 to prevent memory buildup
+recording_buffer_size: 5000  # OPTIMIZED: Reduced from 10000 for better memory usage
 
 # Debug flags
 debug_pose_landmarks: false  # Set true to print landmark coordinates
