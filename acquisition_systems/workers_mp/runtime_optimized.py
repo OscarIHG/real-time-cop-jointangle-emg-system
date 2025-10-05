@@ -27,7 +27,7 @@ from .emg_optimized import OptimizedEMGWorker
 from .cop_optimized import OptimizedCoPWorker 
 from .pose_optimized import OptimizedPoseWorker
 from acquisition_systems.common.config import ConfigDict
-from acquisition_systems.common.types import EMGSample, CopSample, PoseSample, AngleSample
+from acquisition_systems.common.types import EmgSample, CopSample, PoseSample, AngleSample
 
 
 @dataclass
