@@ -18,6 +18,7 @@ if __package__ is None or __package__ == "":
     sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 
 import os
+import sys
 import tkinter as tk
 from tkinter import ttk
 import time
@@ -192,7 +193,11 @@ class App:
         self._last_emg = None
         self._last_cop = None
         self._last_pose = None
+        
+        # Track if we're in the closing process
+        self._closing = False
 
+        # Set up proper close handling
         self.root.protocol("WM_DELETE_WINDOW", self.on_close)
 
     # ----- helper methods -----
@@ -296,8 +301,10 @@ class App:
 
     # ----- main loop -----
     def _tick(self):
-        if not self.running or self.started is None:
+        # Don't continue if we're closing
+        if self._closing or not self.running or self.started is None:
             return
+            
         now = time.time()
         if now >= self.t_stop:
             self.toggle_start()  # Stop
@@ -401,17 +408,49 @@ class App:
             print("[GUI] Tick error:")
             traceback.print_exc()
 
-        self.root.after(16, self._tick)
+        # Only schedule next tick if not closing
+        if not self._closing:
+            self.root.after(16, self._tick)
 
     def _stop_all(self):
+        """Stop all workers and clean up resources."""
+        print("[GUI] Stopping all workers...")
         if self.started:
             stop_workers(self.started)
+            # Give threads time to finish
+            time.sleep(0.5)
         self.running = False
         self.started = None
+        print("[GUI] All workers stopped.")
 
     def on_close(self):
+        """Handle window close event with proper cleanup."""
+        if self._closing:
+            return  # Already closing
+            
+        print("[GUI] Closing application...")
+        self._closing = True
+        
+        # Stop any running acquisition
         self._stop_all()
-        self.root.destroy()
+        
+        # Clean up matplotlib resources
+        try:
+            plt.close(self.fig)
+        except Exception:
+            pass
+        
+        # Destroy the GUI
+        try:
+            self.root.destroy()
+        except Exception:
+            pass
+        
+        print("[GUI] Application closed.")
+        
+        # Force exit to ensure all threads terminate
+        # This prevents the program from hanging
+        sys.exit(0)
 
 
 def main():
