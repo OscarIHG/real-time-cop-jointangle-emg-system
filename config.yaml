@@ -1,0 +1,39 @@
+# =============================================================================
+# SYSTEM CONFIGURATION - REAL-TIME COP-JOINTANGLE-EMG
+# =============================================================================
+
+# --- EMG (ESP32 over RFCOMM) ---
+emg_mac: "A4:CF:12:96:8B:9E"
+emg_com_port: "COM4"        # Windows ONLY: the COM port assigned to the paired ESP32
+emg_rfcomm_channel: 1
+emg_vmin: 0.0
+emg_vmax: 5.0
+emg_allow_lf: false         # set to true if your firmware sends LF instead of CRLF
+emg_start_token: "1"
+emg_stop_token: "2"
+
+# --- Center of Pressure (force plate) ---
+cop_gain: 1.0
+cop_x_dist_cm: 55.84        # total width (2 * 27.92)
+cop_y_dist_cm: 40.64        # total height (2 * 20.32)
+cop_x_half_range_cm: 27.92  # ±27.92 cm along X (GUI)
+cop_y_half_range_cm: 20.32  # ±20.32 cm along Y (GUI)
+cop_interval_ms: 20         # 50 Hz
+cop_flip_x: false
+cop_flip_y: true   
+cop_swap_xy: false
+
+# --- Pose / Camera ---
+# cam_index: Use 0 for built-in webcams, or 1/2 for connected USB cameras (especially on Windows).
+cam_index: 0
+cam_width: 640
+cam_height: 480
+cam_fps: 30
+
+mediapipe_model_complexity: 0
+mediapipe_min_detection_confidence: 0.7
+mediapipe_min_tracking_confidence: 0.5
+
+# --- Plot windows (GUI) ---
+emg_plot_window: 150
+angle_plot_window: 40

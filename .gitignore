@@ -1,0 +1,97 @@
+# Python bytecode / caches
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+
+# Virtual environments (optional)
+venv/
+venv-*/
+venv_*/
+*venv/
+*.venv/
+venv-common/
+venv-movenet/
+env/
+.venv/
+ENV/
+env.bak/
+venv.bak/
+
+# Operating system artifacts (optional)
+.DS_Store
+
+# Editor/IDE settings (optional)
+.vscode/
+.idea/
+
+# Output sessions
+sessions/
+
+# Python cache files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Data files and outputs
+*.csv
+*.xlsx
+*.json
+emg_*.csv
+logs/
+output/
+data/
+recordings/
+
+# Machine learning models
+*.tflite
+*.pb
+*.h5
+movenet_lightning_int8.tflite
+pose_landmark_lite.tflite
+
+# IDE files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS files
+.DS_Store
+Thumbs.db
+.directory
+
+# Temporary files
+*.tmp
+*.temp
+*.log
+*.backup
+
+# Jupyter Notebook checkpoints
+.ipynb_checkpoints/
+
+# Environment variables
+.env
+.env.local
+.env.*.local
+
+# Documentation builds
+docs/_build/
+
+# PyInstaller
+*.manifest
+*.spec
+dist/
+build/
+
+# Hardware-specific files
+*.bluetooth
+*.phidgets
+
+# Test files
+test_data/
+*.test
+
+# Other
+*.pdf
