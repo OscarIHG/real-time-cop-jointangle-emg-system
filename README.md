@@ -6,6 +6,12 @@ Based on the paper: *"Design of a System for the Real-Time Acquisition of Center
 
 ---
 
+## Hardware Documentation
+
+For complete hardware specifications, assembly instructions, schematics, and the Bill of Materials (BOM), please visit the project's [GitHub Wiki](https://github.com/OscarIHG/real-time-cop-jointangle-emg-system/wiki).
+
+---
+
 ## Features
 
 This repository provides a software implementation designed for Raspberry Pi 4 (Raspberry Pi OS 64-bit) and Windows systems.
