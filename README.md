@@ -1,8 +1,11 @@
 # Real-Time CoP-JointAngle-EMG System
 
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+[![DOI](https://img.shields.io/badge/DOI-10.1007%2F978--3--032--13729--6__38-blue)](https://doi.org/10.1007/978-3-032-13729-6_38)
+
 Integrated system for real-time measurement of Center of Pressure, Joint Angles, and Abdominal EMG.
 
-Based on the paper: *"Design of a System for the Real-Time Acquisition of Center of Pressure, Joint Angle, and Abdominal EMG"*
+Based on the paper: *"Design of a System for the Real-Time Acquisition of Center of Pressure, Joint Angle, and Abdominal EMG"* — published in **IFMBE Proceedings, vol. 137**, Springer, 2026. [→ Read the paper](https://link.springer.com/chapter/10.1007/978-3-032-13729-6_38)
 
 ---
 
@@ -96,17 +99,23 @@ Hardware specifications are defined in the `config.yaml` file.
 
 ```text
 real-time-cop-jointangle-emg-system/
+├── CITATION.cff              # Academic citation metadata
+├── LICENSE                   # MIT License
+├── README.md                 # Setup, usage and troubleshooting guide
+├── config.yaml               # Hardware configuration parameters
 ├── setup.sh                  # Micromamba installer script (Linux)
 ├── setup.ps1                 # uv installer script (Windows)
-├── config.yaml               # Hardware configurations
-├── esp32_firmware/           # 1000 Hz ESP32 Bluetooth Firmware
+├── esp32_firmware/           # 1000 Hz ESP32 Bluetooth firmware
+├── hardware/
+│   └── 3d_prints/
+│       └── camera_enclosure/ # 3D printable STL files for camera mount
 └── acquisition_systems/
     ├── app_gui.py            # Main GUI script
-    ├── recorder.py           # CSV Export module
-    └── workers/              
-        ├── emg.py            # Bluetooth Socket/Serial module
+    ├── recorder.py           # CSV export module
+    └── workers/
+        ├── emg.py            # Bluetooth socket/serial module
         ├── cop.py            # Phidget force plate module
-        └── pose.py           # MediaPipe module
+        └── pose.py           # MediaPipe joint angle module
 ```
 
 ---

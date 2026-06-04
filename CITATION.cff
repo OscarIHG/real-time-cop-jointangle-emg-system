@@ -1,0 +1,46 @@
+cff-version: 1.2.0
+message: "If you use this software, please cite the associated paper as below."
+title: "Real-Time CoP-JointAngle-EMG Acquisition System"
+repository-code: "https://github.com/OscarIHG/real-time-cop-jointangle-emg-system"
+license: MIT
+authors:
+  - family-names: "Alvarez Padilla"
+    given-names: "Francisco Javier"
+    affiliation: "Universidad de Guadalajara"
+  - family-names: "Hernandez Gomez"
+    given-names: "Oscar Ivan"
+    affiliation: "Universidad de Guadalajara"
+  - family-names: "Quintero Valdez"
+    given-names: "Jose Rodrigo"
+    affiliation: "Universidad de Guadalajara"
+  - family-names: "Velasco Lopez"
+    given-names: "Jose Carlos"
+    affiliation: "Universidad de Guadalajara"
+preferred-citation:
+  type: conference-paper
+  title: "Design of a System for the Real-Time Acquisition of Center of Pressure, Joint Angle, and Abdominal EMG"
+  authors:
+    - family-names: "Alvarez Padilla"
+      given-names: "Francisco Javier"
+      affiliation: "Universidad de Guadalajara"
+    - family-names: "Hernandez Gomez"
+      given-names: "Oscar Ivan"
+      affiliation: "Universidad de Guadalajara"
+    - family-names: "Quintero Valdez"
+      given-names: "Jose Rodrigo"
+      affiliation: "Universidad de Guadalajara"
+    - family-names: "Velasco Lopez"
+      given-names: "Jose Carlos"
+      affiliation: "Universidad de Guadalajara"
+  collection-title: "XLVIII Mexican Conference on Biomedical Engineering (CNIB 2025)"
+  collection-type: "proceedings"
+  series: "IFMBE Proceedings"
+  volume: 137
+  publisher:
+    name: "Springer, Cham"
+  year: 2026
+  start: 355
+  end: 363
+  doi: "10.1007/978-3-032-13729-6_38"
+  isbn: "978-3-032-13729-6"
+  url: "https://link.springer.com/chapter/10.1007/978-3-032-13729-6_38"
