@@ -27,14 +27,6 @@ This repository provides a software implementation designed for Raspberry Pi 4 (
 
 ---
 
-## Hardware Evolution & Paper Compatibility
-
-While the published paper documents the initial prototype using the **Rpi P5V04A V1.3** (CSI camera module), this repository currently recommends the use of a standard **USB 3.0 UVC Camera (e.g., HBVCAM-W202012HD)**. This migration was implemented post-publication to provide seamless cross-platform compatibility, allowing the system's software to run natively on both Raspberry Pi OS and Windows without requiring hardware adapters.
-
-The software architecture and analytical capabilities remain functionally identical to those described in the original study.
-
----
-
 ## Installation
 
 The installation scripts configure isolated virtual environments.
