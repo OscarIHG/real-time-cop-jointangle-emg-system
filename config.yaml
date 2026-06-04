@@ -14,10 +14,10 @@ emg_stop_token: "2"
 
 # --- Center of Pressure (force plate) ---
 cop_gain: 1.0
-cop_x_dist_cm: 55.84        # total width (2 * 27.92)
-cop_y_dist_cm: 40.64        # total height (2 * 20.32)
-cop_x_half_range_cm: 27.92  # ±27.92 cm along X (GUI)
-cop_y_half_range_cm: 20.32  # ±20.32 cm along Y (GUI)
+cop_x_dist_cm: 55.88        # total width (2 * 27.94)
+cop_y_dist_cm: 40.54        # total height (2 * 20.27)
+cop_x_half_range_cm: 27.94  # ±27.94 cm along X (GUI)
+cop_y_half_range_cm: 20.27  # ±20.27 cm along Y (GUI)
 cop_interval_ms: 20         # 50 Hz
 cop_flip_x: false
 cop_flip_y: true   
