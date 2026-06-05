@@ -78,7 +78,7 @@ class Recorder:
         emg_i = cop_i = pose_i = ang_i = -1
         emg_last = cop_last = pose_last = ang_last = None
 
-        header = ["time_s", "emg_V", "cop_x_cm", "cop_y_cm", "weight_kg", "angle_deg"]
+        header = ["time_s", "emg_V", "emg_filtered_V", "cop_x_cm", "cop_y_cm", "weight_kg", "angle_deg"]
         for i in range(LM_COUNT):
             header += [f"lm{i}_x", f"lm{i}_y"]
 
@@ -114,6 +114,7 @@ class Recorder:
 
                 # Create a row using the most recent samples
                 emg_v = _f(emg_last.value) if emg_last else float("nan")
+                emg_f = _f(emg_last.filtered) if emg_last else float("nan")
                 cop_x = _f(cop_last.x) if cop_last else float("nan")
                 cop_y = _f(cop_last.y) if cop_last else float("nan")
                 cop_kg = _f(cop_last.kg) if cop_last else float("nan")
@@ -124,7 +125,7 @@ class Recorder:
                     n = min(LM_COUNT, pose_last.landmarks.shape[0])
                     lm[:n, :2] = pose_last.landmarks[:n, :2]
 
-                row = [float(t), emg_v, cop_x, cop_y, cop_kg, ang_d]
+                row = [float(t), emg_v, emg_f, cop_x, cop_y, cop_kg, ang_d]
                 row.extend(lm.reshape(-1).tolist())
                 w.writerow(row)
 
@@ -147,8 +148,8 @@ class Recorder:
             files.append(path)
 
         # EMG stream
-        emg_rows = [[_f(s.t), _f(s.value)] for s in self._emg]
-        save(os.path.join(out_dir, f"{base_name}_emg.csv"), ["time_s", "emg_V"], emg_rows)
+        emg_rows = [[_f(s.t), _f(s.value), _f(s.filtered)] for s in self._emg]
+        save(os.path.join(out_dir, f"{base_name}_emg.csv"), ["time_s", "emg_V", "emg_filtered_V"], emg_rows)
 
         # CoP stream
         cop_rows = [[_f(s.t), _f(s.x), _f(s.y), _f(s.kg)] for s in self._cop]

@@ -17,6 +17,13 @@ import threading
 import queue
 import socket
 from typing import Optional
+import numpy as np
+
+try:
+    import scipy.signal as signal
+    HAS_SCIPY = True
+except ImportError:
+    HAS_SCIPY = False
 
 from acquisition_systems.common.types import EmgSample
 from acquisition_systems.common.utils import put_latest
@@ -57,6 +64,13 @@ class EMGWorker:
         self._stop = threading.Event()
         self._thread: Optional[threading.Thread] = None
         self._tail = b""  # partial line buffer across recv() calls
+
+        # Filter initialization
+        if HAS_SCIPY:
+            self.b_notch, self.a_notch = signal.iirnotch(60.0, 30.0, fs=1000.0)
+            self.b_low, self.a_low = signal.butter(6, 10.0, btype='low', fs=1000.0)
+            self.zi_notch = signal.lfilter_zi(self.b_notch, self.a_notch) * 0.0
+            self.zi_low = signal.lfilter_zi(self.b_low, self.a_low) * 0.0
 
     # ---------- connection ----------
     def _connect(self):
@@ -201,9 +215,19 @@ except Exception as e:
                     continue
 
                 t = time.perf_counter()
-                for v in vals:
+                
+                if HAS_SCIPY:
+                    chunk = np.array(vals)
+                    filt_1, self.zi_notch = signal.lfilter(self.b_notch, self.a_notch, chunk, zi=self.zi_notch)
+                    filt_2, self.zi_low = signal.lfilter(self.b_low, self.a_low, filt_1, zi=self.zi_low)
+                    env = np.abs(signal.hilbert(filt_2))
+                    filtered_vals = env.tolist()
+                else:
+                    filtered_vals = vals
+
+                for v, f in zip(vals, filtered_vals):
                     try:
-                        self.queue.put_nowait(EmgSample(t=t, value=v))
+                        self.queue.put_nowait(EmgSample(t=t, value=v, filtered=f))
                     except queue.Full:
                         pass # if we fall behind, drop oldest or ignore. Ignoring is safer here.
         finally:

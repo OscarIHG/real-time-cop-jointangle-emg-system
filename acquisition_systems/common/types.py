@@ -10,7 +10,8 @@ import numpy as np
 @dataclass
 class EmgSample:
     t: float       # timestamp in seconds (perf_counter)
-    value: float   # voltage between 0 and 5 V
+    value: float   # voltage between 0 and 5 V (raw)
+    filtered: float = 0.0  # voltage after processing (notch, lowpass, hilbert)
 
 @dataclass
 class CopSample:
