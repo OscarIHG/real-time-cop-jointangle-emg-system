@@ -175,14 +175,14 @@ class MainWindow(QtWidgets.QMainWindow):
             try:
                 self.emg_worker = EMGWorker(
                     self.cfg.emg_mac,
-                    getattr(self.cfg, 'emg_com_port', 'COM3'),
+                    self.cfg.emg_com_port,
                     self.cfg.emg_rfcomm_channel,
                     self.cfg.emg_vmin,
                     self.cfg.emg_vmax,
                     start_token=self.cfg.emg_start_token,
                     stop_token=self.cfg.emg_stop_token,
                 )
-                self.emg_worker.ALLOW_LF = bool(getattr(self.cfg, 'emg_allow_lf', False))
+                self.emg_worker.ALLOW_LF = bool(self.cfg.emg_allow_lf)
                 self.emg_worker.start()
             except Exception as e:
                 print(f"[WARNING] Could not start EMG Worker (Bluetooth). It will be disabled. Error: {e}")
@@ -358,14 +358,19 @@ class MainWindow(QtWidgets.QMainWindow):
 
     def _stop_all(self):
         self.timer.stop()
-        print("[GUI] Stopping all workers...")
-        for w in (self.emg_worker, self.cop_worker, self.pose_worker):
-            try:
-                if w: w.stop()
-            except Exception:
-                pass
-        self.emg_worker = self.cop_worker = self.pose_worker = None
         self.running = False
+        print("[GUI] Stopping all workers...")
+        workers = [w for w in (self.emg_worker, self.cop_worker, self.pose_worker) if w]
+        self.emg_worker = self.cop_worker = self.pose_worker = None
+        # Stop workers in background so the UI doesn't freeze
+        import threading
+        def _shutdown():
+            for w in workers:
+                try:
+                    w.stop()
+                except Exception:
+                    pass
+        threading.Thread(target=_shutdown, daemon=True).start()
         print("[GUI] All workers stopped.")
 
     def closeEvent(self, event):
