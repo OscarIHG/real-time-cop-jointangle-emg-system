@@ -20,6 +20,12 @@ import numpy as np
 from PyQt5 import QtWidgets, QtCore, QtGui
 import pyqtgraph as pg
 
+try:
+    import scipy.signal as signal
+    HAS_SCIPY = True
+except ImportError:
+    HAS_SCIPY = False
+
 from acquisition_systems.common.config import load_config
 from acquisition_systems.recorder import Recorder
 from acquisition_systems.workers.emg import EMGWorker
@@ -58,6 +64,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self._setup_ui()
 
         self._emg_buf = []
+        self._emg_filtered_buf = []
         self._ang_buf = []
 
         self.rec = Recorder()
@@ -101,6 +108,13 @@ class MainWindow(QtWidgets.QMainWindow):
         self.b_save.setMinimumWidth(80)
         self.b_save.clicked.connect(self.save_csv)
         control_layout.addWidget(self.b_save)
+
+        self.cb_filter = QtWidgets.QCheckBox("Filtered EMG (Paper)")
+        self.cb_filter.setChecked(True)
+        if not HAS_SCIPY:
+            self.cb_filter.setEnabled(False)
+            self.cb_filter.setToolTip("SciPy not installed. Filtering disabled.")
+        control_layout.addWidget(self.cb_filter)
 
         control_layout.addStretch()
         layout.addLayout(control_layout)
@@ -208,7 +222,15 @@ class MainWindow(QtWidgets.QMainWindow):
                 return
 
             self._emg_buf.clear()
+            self._emg_filtered_buf.clear()
             self._ang_buf.clear()
+            
+            if HAS_SCIPY:
+                self.b_notch, self.a_notch = signal.iirnotch(60.0, 30.0, fs=1000.0)
+                self.b_low, self.a_low = signal.butter(6, 10.0, btype='low', fs=1000.0)
+                # Initialize state with zeros to match filter dimensions
+                self.zi_notch = signal.lfilter_zi(self.b_notch, self.a_notch) * 0.0
+                self.zi_low = signal.lfilter_zi(self.b_low, self.a_low) * 0.0
             
             # Clear plots
             self.emg_curve.setData([])
@@ -247,12 +269,15 @@ class MainWindow(QtWidgets.QMainWindow):
 
         try:
             # Drain EMG queue
+            new_emg_vals = []
             emg_latest = None
             if self.emg_worker:
                 while not self.emg_worker.queue.empty():
                     try:
                         emg = self.emg_worker.queue.get_nowait()
-                        if emg: self.rec.push_emg(emg)
+                        if emg: 
+                            self.rec.push_emg(emg)
+                            new_emg_vals.append(emg.value)
                         emg_latest = emg
                     except queue.Empty:
                         break
@@ -291,13 +316,29 @@ class MainWindow(QtWidgets.QMainWindow):
                         break
 
             # --- High-Performance PyQtGraph Updates ---
-            if emg_latest:
-                self._emg_buf.append(emg_latest.value)
-                self._emg_buf = self._emg_buf[-max(self.emg_plot_window * 25, 2000):]
-                self.emg_curve.setData(self._emg_buf)
-                right = len(self._emg_buf)
-                left  = max(0, right - self.emg_plot_window)
-                self.p_emg.setXRange(left, left + self.emg_plot_window, padding=0)
+            if new_emg_vals:
+                self._emg_buf.extend(new_emg_vals)
+                
+                if HAS_SCIPY and self.cb_filter.isChecked():
+                    chunk = np.array(new_emg_vals)
+                    # 1. Notch filter
+                    filt_1, self.zi_notch = signal.lfilter(self.b_notch, self.a_notch, chunk, zi=self.zi_notch)
+                    # 2. Low-pass filter
+                    filt_2, self.zi_low = signal.lfilter(self.b_low, self.a_low, filt_1, zi=self.zi_low)
+                    # 3. Hilbert envelope
+                    env = np.abs(signal.hilbert(filt_2))
+                    self._emg_filtered_buf.extend(env.tolist())
+                    
+                    self._emg_filtered_buf = self._emg_filtered_buf[-max(self.emg_plot_window * 1000, 2000):]
+                    self.emg_curve.setData(self._emg_filtered_buf)
+                else:
+                    self._emg_buf = self._emg_buf[-max(self.emg_plot_window * 1000, 2000):]
+                    self.emg_curve.setData(self._emg_buf)
+                
+                # Update X range based on the buffer being plotted
+                plot_buf_len = len(self._emg_filtered_buf) if (HAS_SCIPY and self.cb_filter.isChecked()) else len(self._emg_buf)
+                left = max(0, plot_buf_len - self.emg_plot_window * 1000)
+                self.p_emg.setXRange(left, left + self.emg_plot_window * 1000, padding=0)
 
             if cop_latest:
                 try:
