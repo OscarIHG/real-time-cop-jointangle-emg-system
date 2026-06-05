@@ -3,7 +3,7 @@
 # =============================================================================
 
 # --- EMG (ESP32 over RFCOMM) ---
-emg_mac: "A4:CF:12:96:8B:9E"
+emg_mac: "68:FE:71:80:1F:CA"
 emg_com_port: "COM4"        # Windows ONLY: the COM port assigned to the paired ESP32
 emg_rfcomm_channel: 1
 emg_vmin: 0.0

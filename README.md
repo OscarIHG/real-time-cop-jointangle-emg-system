@@ -105,7 +105,9 @@ real-time-cop-jointangle-emg-system/
 ├── config.yaml               # Hardware configuration parameters
 ├── setup.sh                  # Micromamba installer script (Linux)
 ├── setup.ps1                 # uv installer script (Windows)
-├── esp32_firmware/           # 1000 Hz ESP32 Bluetooth firmware
+├── esp32_firmware/           # ESP32 Arduino sketches
+│   ├── README.md             # Firmware docs & Core version warning
+│   └── emg_simulator/        # Synthetic EMG signal generator for testing
 ├── hardware/
 │   └── 3d_prints/
 │       └── camera_enclosure/ # 3D printable STL files for camera mount
@@ -122,6 +124,8 @@ real-time-cop-jointangle-emg-system/
 
 ## Troubleshooting
 
-* **Windows Bluetooth Connections:** If the Bluetooth port becomes unresponsive, remove the device from Windows Bluetooth Settings, restart the ESP32, and pair it again. Update the `emg_com_port` parameter in `config.yaml` to the newly assigned Outgoing COM port.
+* **ESP32 Arduino Core Version (Critical):** You **must** compile the ESP32 firmware using **Arduino Core version 2.0.17** (or any 2.x release). Core 3.x introduced breaking changes to the Bluetooth Classic (SPP) stack that cause COM port hangs and connection failures on Windows 10/11. The device may appear paired but the serial link will never establish. For full firmware installation instructions, see [Module 2: ESP32 EMG in the Hardware Wiki](https://github.com/OscarIHG/real-time-cop-jointangle-emg-system/wiki/Module-2-ESP32-EMG).
+* **Windows Bluetooth Connections:** If the Bluetooth port becomes unresponsive, remove the device from Windows Bluetooth Settings, restart the ESP32, and pair it again. Update the `emg_com_port` parameter in `config.yaml` to the newly assigned **Outgoing** COM port (not the Incoming one). You can identify the correct port in Device Manager under Bluetooth → look for the port whose Hardware ID contains your ESP32's MAC address.
 * **Linux Bluetooth Connections:** Verify that the ESP32 is trusted and paired using the `bluetoothctl` utility prior to execution.
 * **Camera Initialization:** Modify the `cam_index` parameter in `config.yaml` (index 0 typically corresponds to the integrated webcam).
+* **EMG Simulator Firmware:** An EMG simulator sketch is provided in `esp32_firmware/emg_simulator/` for testing the GUI without real EMG hardware. See [`esp32_firmware/README.md`](esp32_firmware/README.md) for details.

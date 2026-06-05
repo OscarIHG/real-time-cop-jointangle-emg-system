@@ -16,6 +16,7 @@ import yaml
 class Config:
     # EMG
     emg_mac: str = "00:00:00:00:00:00"
+    emg_com_port: str = "COM3"
     emg_rfcomm_channel: int = 1
     emg_vmin: float = 0.0
     emg_vmax: float = 5.0
@@ -27,10 +28,10 @@ class Config:
     cop_swap_xy: bool = False
     # CoP (worker inputs and GUI ranges)
     cop_gain: Any = 1.0            # was float; now Any to accept list[float] or float
-    cop_x_dist_cm: float = 55.84
-    cop_y_dist_cm: float = 40.64
-    cop_x_half_range_cm: float = 27.92
-    cop_y_half_range_cm: float = 20.32
+    cop_x_dist_cm: float = 55.88
+    cop_y_dist_cm: float = 40.54
+    cop_x_half_range_cm: float = 27.94
+    cop_y_half_range_cm: float = 20.27
     cop_interval_ms: int = 10
 
     # Camera / Pose
@@ -38,6 +39,14 @@ class Config:
     cam_width: int = 640
     cam_height: int = 480
     cam_fps: int = 30
+
+    # MediaPipe
+    mediapipe_model_complexity: int = 0
+    mediapipe_min_detection_confidence: float = 0.7
+    mediapipe_min_tracking_confidence: float = 0.5
+    mediapipe_smooth_landmarks: bool = True
+    mediapipe_enable_segmentation: bool = False
+    mediapipe_smooth_segmentation: bool = False
 
     # Plot (GUI)
     emg_plot_window: int = 200
@@ -72,6 +81,7 @@ def load_config() -> Config:
 
     # EMG
     cfg.emg_mac           = str(data.get("emg_mac", cfg.emg_mac))
+    cfg.emg_com_port      = str(data.get("emg_com_port", cfg.emg_com_port))
     cfg.emg_rfcomm_channel = int(data.get("emg_rfcomm_channel", cfg.emg_rfcomm_channel))
     cfg.emg_vmin          = float(data.get("emg_vmin", cfg.emg_vmin))
     cfg.emg_vmax          = float(data.get("emg_vmax", cfg.emg_vmax))
@@ -103,13 +113,21 @@ def load_config() -> Config:
     cfg.cop_interval_ms = int(data.get("cop_interval_ms", cfg.cop_interval_ms))
 
     # Camera / Pose
-    cfg.cam_index = int(data.get("cam_index", cfg.cam_index))
-    cfg.cam_width = int(data.get("cam_width", cfg.cam_width))
+    cfg.cam_index  = int(data.get("cam_index",  cfg.cam_index))
+    cfg.cam_width  = int(data.get("cam_width",  cfg.cam_width))
     cfg.cam_height = int(data.get("cam_height", cfg.cam_height))
-    cfg.cam_fps = int(data.get("cam_fps", cfg.cam_fps))
+    cfg.cam_fps    = int(data.get("cam_fps",    cfg.cam_fps))
+
+    # MediaPipe
+    cfg.mediapipe_model_complexity          = int(data.get("mediapipe_model_complexity",          cfg.mediapipe_model_complexity))
+    cfg.mediapipe_min_detection_confidence  = float(data.get("mediapipe_min_detection_confidence", cfg.mediapipe_min_detection_confidence))
+    cfg.mediapipe_min_tracking_confidence   = float(data.get("mediapipe_min_tracking_confidence",  cfg.mediapipe_min_tracking_confidence))
+    cfg.mediapipe_smooth_landmarks          = bool(data.get("mediapipe_smooth_landmarks",          cfg.mediapipe_smooth_landmarks))
+    cfg.mediapipe_enable_segmentation       = bool(data.get("mediapipe_enable_segmentation",       cfg.mediapipe_enable_segmentation))
+    cfg.mediapipe_smooth_segmentation       = bool(data.get("mediapipe_smooth_segmentation",       cfg.mediapipe_smooth_segmentation))
 
     # Plot
-    cfg.emg_plot_window = int(data.get("emg_plot_window", cfg.emg_plot_window))
+    cfg.emg_plot_window   = int(data.get("emg_plot_window",   cfg.emg_plot_window))
     cfg.angle_plot_window = int(data.get("angle_plot_window", cfg.angle_plot_window))
 
     return cfg
@@ -128,6 +146,7 @@ def config_to_dict(config: Config) -> ConfigDict:
     return {
         # EMG
         'emg_mac': config.emg_mac,
+        'emg_com_port': config.emg_com_port,
         'emg_rfcomm_channel': config.emg_rfcomm_channel,
         'emg_vmin': config.emg_vmin,
         'emg_vmax': config.emg_vmax,
@@ -144,21 +163,21 @@ def config_to_dict(config: Config) -> ConfigDict:
         'cop_x_half_range_cm': config.cop_x_half_range_cm,
         'cop_y_half_range_cm': config.cop_y_half_range_cm,
         'cop_interval_ms': config.cop_interval_ms,
-        # Camera / Pose - OPTIMIZED DEFAULTS
+        # Camera / Pose
         'cam_index': config.cam_index,
-        'cam_width': getattr(config, 'cam_width', 480),   # Reduced from 640
-        'cam_height': getattr(config, 'cam_height', 360), # Reduced from 480  
-        'cam_fps': getattr(config, 'cam_fps', 20),        # Reduced from 30
+        'cam_width': config.cam_width,
+        'cam_height': config.cam_height,
+        'cam_fps': config.cam_fps,
         # Plot
         'emg_plot_window': config.emg_plot_window,
         'angle_plot_window': config.angle_plot_window,
-        # MediaPipe defaults - PERFORMANCE OPTIMIZED
-        'mediapipe_model_complexity': 0,              # REDUCED: 0=fast, 2=accurate
-        'mediapipe_min_detection_confidence': 0.7,    # INCREASED for reliability
-        'mediapipe_min_tracking_confidence': 0.5,
-        'mediapipe_smooth_landmarks': True,
-        'mediapipe_enable_segmentation': False,       # DISABLED for performance
-        'mediapipe_smooth_segmentation': False,
+        # MediaPipe
+        'mediapipe_model_complexity': config.mediapipe_model_complexity,
+        'mediapipe_min_detection_confidence': config.mediapipe_min_detection_confidence,
+        'mediapipe_min_tracking_confidence': config.mediapipe_min_tracking_confidence,
+        'mediapipe_smooth_landmarks': config.mediapipe_smooth_landmarks,
+        'mediapipe_enable_segmentation': config.mediapipe_enable_segmentation,
+        'mediapipe_smooth_segmentation': config.mediapipe_smooth_segmentation,
     }
 
 # Function to load config as dictionary (compatibility)

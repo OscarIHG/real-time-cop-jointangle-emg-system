@@ -20,7 +20,7 @@ import numpy as np
 from PyQt5 import QtWidgets, QtCore, QtGui
 import pyqtgraph as pg
 
-from acquisition_systems.common.config import load_config
+from acquisition_systems.common.config import load_config, config_to_dict
 from acquisition_systems.recorder import Recorder
 from acquisition_systems.workers.emg import EMGWorker
 from acquisition_systems.workers.cop import CoPWorker
@@ -168,7 +168,7 @@ class MainWindow(QtWidgets.QMainWindow):
             try:
                 self.emg_worker = EMGWorker(
                     self.cfg.emg_mac,
-                    getattr(self.cfg, 'emg_com_port', 'COM3'),
+                    self.cfg.emg_com_port,
                     self.cfg.emg_rfcomm_channel,
                     self.cfg.emg_vmin,
                     self.cfg.emg_vmax,
@@ -195,7 +195,11 @@ class MainWindow(QtWidgets.QMainWindow):
             print("[GUI] Starting Pose Worker...")
             try:
                 self.pose_worker = PoseWorker(
-                    self.cfg.cam_index, self.cfg.cam_width, self.cfg.cam_height, getattr(self.cfg, 'cam_fps', 30)
+                    self.cfg.cam_index,
+                    self.cfg.cam_width,
+                    self.cfg.cam_height,
+                    self.cfg.cam_fps,
+                    config=config_to_dict(self.cfg),
                 )
                 self.pose_worker.start()
             except Exception as e:

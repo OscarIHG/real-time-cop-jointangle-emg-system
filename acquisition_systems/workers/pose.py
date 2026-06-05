@@ -91,10 +91,9 @@ class PoseWorker:
             raise ImportError(f"OpenCV and MediaPipe are required: {_pose_import_error}")
         
         self.idx = cam_index
-        # OPTIMIZATION: Reduce resolution for better performance
-        self.cam_w = int(min(width, 480))   # Max 480 width for performance
-        self.cam_h = int(min(height, 360))  # Max 360 height for performance
-        self.fps = int(min(fps, 20))        # Max 20 FPS for performance
+        self.cam_w = int(width)
+        self.cam_h = int(height)
+        self.fps = int(fps)
         
         # MediaPipe configuration - OPTIMIZED for performance
         if config:
@@ -302,7 +301,7 @@ class PoseWorker:
         self._thread = threading.Thread(target=self._loop, daemon=True)
         self._thread.start()
         
-        print(f"[PoseWorker] ✅ Started - Camera {self.idx} ({self.cam_w}x{self.cam_h} @ {self.fps}fps)")
+        print(f"[PoseWorker] Started - Camera {self.idx} ({self.cam_w}x{self.cam_h} @ {self.fps}fps)")
     
     def stop(self):
         """Stop acquisition and release resources."""
@@ -313,4 +312,4 @@ class PoseWorker:
             self._thread.join(timeout=2.0)
             self._thread = None
         
-        print("[PoseWorker] ✅ Stopped correctly")
+        print("[PoseWorker] Stopped correctly")

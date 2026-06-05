@@ -1,6 +1,10 @@
 // ==============================================================================
 // ESP32 EMG Bluetooth Serial Firmware
 // Compatible with the Real-Time CoP-JointAngle-EMG project
+//
+// IMPORTANT: Compile with ESP32 Arduino Core version 2.0.17 or earlier.
+//            Core 3.x has known Bluetooth Classic (SPP) compatibility issues
+//            with Windows 10/11 that cause COM port hangs and connection failures.
 // ==============================================================================
 
 #include "BluetoothSerial.h"
