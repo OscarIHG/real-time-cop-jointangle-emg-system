@@ -1,8 +1,12 @@
 // ==============================================================================
 // ESP32 EMG Bluetooth Serial Firmware - SIMULATOR MODE
 // ==============================================================================
-// This firmware simulates a human EMG signal + 60Hz electrical noise.
-// Flash this to your ESP32 to test the Python GUI without the physical EMG module.
+// Misma lógica que el firmware real (esp32_firmware.ino) pero en lugar de leer
+// del pin analógico A0, genera una señal EMG sintética con:
+//   - Línea base de 1.5V (reposo)
+//   - Ruido de 60 Hz (red eléctrica) → para probar el filtro Notch
+//   - Ruido blanco de fondo
+//   - Bursts de contracción muscular cada 4 segundos
 // ==============================================================================
 
 #include "BluetoothSerial.h"
@@ -11,84 +15,99 @@
 #error Bluetooth is not enabled! Please run `make menuconfig` to and enable it
 #endif
 
+// --- Pin ---
+#define LED_PIN 2   // LED incorporado del ESP32
+
+// --- Bluetooth ---
 BluetoothSerial SerialBT;
 
-const int ledPin = 2;       // Status LED pin (Built-in LED)
-bool isAcquiring = false;
-unsigned long previousBlinkMillis = 0;
-const long blinkInterval = 500;
+// --- Estado (igual que el firmware real, pero como variables GLOBALES
+//     para que sobrevivan entre iteraciones del loop) ---
+bool          connected      = false;
+unsigned long previousMillis = 0;
+const long    interval       = 500; // ms de parpadeo esperando conexión
 
-unsigned long previousMicros = 0;
-const unsigned long sampleIntervalMicros = 1000; // 1000 Hz
+// --- Temporización de muestreo a 1000 Hz ---
+unsigned long previousMicros      = 0;
+const unsigned long sampleInterval = 1000; // 1000 µs = 1 ms = 1000 Hz
 
 void setup() {
   Serial.begin(115200);
-  pinMode(ledPin, OUTPUT);
-  
-  // Same Bluetooth name so your Python code connects automatically
-  SerialBT.begin("ESP32Roquiva"); 
+  pinMode(LED_PIN, OUTPUT);
+  SerialBT.begin("ESP32Roquiva");
   Serial.println("SIMULATOR: BLUETOOTH DEVICE STARTED PAIRING MODE");
 }
 
 void loop() {
-  // Listen for commands from Python
+  unsigned long currentMillis = millis();
+  char          receivedChar  = 0;
+  int           intValue      = 0;
+
+  // ── Leer comando de Python (si hay algo disponible) ──────────────────────
   if (SerialBT.available()) {
-    char cmd = SerialBT.read();
-    if (cmd == '1') {          // start_token
-      isAcquiring = true;
-      digitalWrite(ledPin, HIGH); 
-      Serial.println("Python sent START command (1).");
-    } 
-    else if (cmd == '2') {     // stop_token
-      isAcquiring = false;
-      digitalWrite(ledPin, LOW); 
-      Serial.println("Python sent STOP command (2).");
-    }
+    receivedChar = SerialBT.read();
+    intValue     = atoi(&receivedChar);
+    Serial.print("CMD recibido: ");
+    Serial.println(intValue);
   }
 
-  // Acquisition State
-  if (isAcquiring) {
+  // ── Máquina de estados (lógica idéntica al firmware real) ─────────────────
+  if (!connected) {
+
+    if (intValue == 1) {
+      connected = true;
+      digitalWrite(LED_PIN, HIGH);  // LED fijo = adquiriendo
+      Serial.println("Python -> START (1). Iniciando adquisición...");
+    } else {
+      // Parpadear mientras espera conexión
+      if (currentMillis - previousMillis >= interval) {
+        previousMillis = currentMillis;
+        digitalWrite(LED_PIN, !digitalRead(LED_PIN));
+      }
+    }
+
+  } else {
+    // ── Modo adquisición: generar y enviar muestra cada 1 ms ───────────────
     unsigned long currentMicros = micros();
-    
-    if (currentMicros - previousMicros >= sampleIntervalMicros) {
+
+    if (currentMicros - previousMicros >= sampleInterval) {
       previousMicros = currentMicros;
-      
-      float t = currentMicros / 1000000.0; // Time in seconds
-      
-      // 1. Base voltage of the ADC (typically 1.5V at rest)
+
+      float t = currentMicros / 1000000.0; // segundos
+
+      // 1. Línea base (reposo muscular) ≈ 1.5 V
       float baseline = 1.5;
-      
-      // 2. Add 60 Hz electrical grid noise (to test our new Notch filter!)
-      float noise60 = 0.2 * sin(2 * PI * 60 * t);
-      
-      // 3. Add background white noise
+
+      // 2. Ruido de la red eléctrica a 60 Hz (para probar el filtro Notch)
+      float noise60 = 0.2 * sin(2.0 * PI * 60.0 * t);
+
+      // 3. Ruido blanco de fondo
       float white_noise = (random(-50, 50) / 1000.0);
-      
-      // 4. Simulate a muscle contraction for 1.5 seconds every 4 seconds
+
+      // 4. Burst de contracción muscular: 1.5 s activo cada 4 s
       float burst = 0.0;
       float cycle = fmod(t, 4.0);
       if (cycle > 1.0 && cycle < 2.5) {
-         // High frequency "muscle" noise (approx 100Hz-200Hz broadband) multiplied by a window curve
-         float envelope_shape = sin(PI * ((cycle - 1.0) / 1.5)); 
-         burst = envelope_shape * (random(-150, 150) / 100.0); 
+        float shape = sin(PI * ((cycle - 1.0) / 1.5));
+        burst = shape * (random(-150, 150) / 100.0);
       }
-      
-      // Calculate final simulated voltage
-      float voltage = baseline + noise60 + white_noise + burst;
-      
-      // Clamp to realistic ESP32 ADC limits
-      if (voltage < 0.0) voltage = 0.0;
-      if (voltage > 3.3) voltage = 3.3;
-      
-      // Send data to Python via Bluetooth
-      SerialBT.println(voltage, 4);
+
+      float volt = baseline + noise60 + white_noise + burst;
+
+      // Clampear al rango del ADC del ESP32 (0 – 3.3 V)
+      if (volt < 0.0) volt = 0.0;
+      if (volt > 3.3) volt = 3.3;
+
+      // Enviar a Python
+      Serial.println(volt);
+      SerialBT.println(volt);
     }
-  } else {
-    // Waiting for connection (blink LED)
-    unsigned long currentMillis = millis();
-    if (currentMillis - previousBlinkMillis >= blinkInterval) {
-      previousBlinkMillis = currentMillis;
-      digitalWrite(ledPin, !digitalRead(ledPin));
+
+    // ── Revisar si Python mandó STOP ──────────────────────────────────────
+    if (intValue == 2) {
+      connected = false;
+      digitalWrite(LED_PIN, LOW);
+      Serial.println("Python -> STOP (2). Deteniendo adquisición.");
     }
   }
 }
