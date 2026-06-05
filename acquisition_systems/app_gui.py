@@ -104,17 +104,10 @@ class MainWindow(QtWidgets.QMainWindow):
         self.b_start.clicked.connect(self.toggle_start)
         control_layout.addWidget(self.b_start)
 
-        self.b_save = QtWidgets.QPushButton("Save CSV")
-        self.b_save.setMinimumWidth(80)
-        self.b_save.clicked.connect(self.save_csv)
-        control_layout.addWidget(self.b_save)
-
-        self.cb_filter = QtWidgets.QCheckBox("Filtered EMG (Paper)")
-        self.cb_filter.setChecked(True)
-        if not HAS_SCIPY:
-            self.cb_filter.setEnabled(False)
-            self.cb_filter.setToolTip("SciPy not installed. Filtering disabled.")
-        control_layout.addWidget(self.cb_filter)
+        self.btn_save = QtWidgets.QPushButton("Save CSV")
+        self.btn_save.setMinimumWidth(80)
+        self.btn_save.clicked.connect(self.save_csv)
+        control_layout.addWidget(self.btn_save)
 
         control_layout.addStretch()
         layout.addLayout(control_layout)
@@ -316,7 +309,7 @@ class MainWindow(QtWidgets.QMainWindow):
                 self._emg_buf = self._emg_buf[-max(self.emg_plot_window * 1000, 2000):]
                 self._emg_filtered_buf = self._emg_filtered_buf[-max(self.emg_plot_window * 1000, 2000):]
                 
-                if HAS_SCIPY and self.cb_filter.isChecked():
+                if HAS_SCIPY:
                     self.emg_curve.setData(self._emg_filtered_buf)
                     plot_buf_len = len(self._emg_filtered_buf)
                 else:
