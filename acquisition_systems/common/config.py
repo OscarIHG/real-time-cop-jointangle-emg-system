@@ -16,6 +16,7 @@ import yaml
 class Config:
     # EMG
     emg_mac: str = "00:00:00:00:00:00"
+    emg_com_port: str = "COM3"
     emg_rfcomm_channel: int = 1
     emg_vmin: float = 0.0
     emg_vmax: float = 5.0
@@ -72,6 +73,7 @@ def load_config() -> Config:
 
     # EMG
     cfg.emg_mac           = str(data.get("emg_mac", cfg.emg_mac))
+    cfg.emg_com_port      = str(data.get("emg_com_port", cfg.emg_com_port))
     cfg.emg_rfcomm_channel = int(data.get("emg_rfcomm_channel", cfg.emg_rfcomm_channel))
     cfg.emg_vmin          = float(data.get("emg_vmin", cfg.emg_vmin))
     cfg.emg_vmax          = float(data.get("emg_vmax", cfg.emg_vmax))
@@ -128,6 +130,7 @@ def config_to_dict(config: Config) -> ConfigDict:
     return {
         # EMG
         'emg_mac': config.emg_mac,
+        'emg_com_port': config.emg_com_port,
         'emg_rfcomm_channel': config.emg_rfcomm_channel,
         'emg_vmin': config.emg_vmin,
         'emg_vmax': config.emg_vmax,
