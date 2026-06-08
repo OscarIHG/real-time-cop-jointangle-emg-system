@@ -6,7 +6,6 @@
 numpy
 scipy
 pandas
-matplotlib
 pyqtgraph; sys_platform == 'win32'
 PyQt5; sys_platform == 'win32'
 
