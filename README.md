@@ -87,8 +87,8 @@ Ensure the hardware components (ESP32, Camera, Force Plate) are connected. Verif
 4. Select **Start** to begin data acquisition.
 5. Select **Save CSV** after the acquisition period to export the synchronized data to the `sessions/` directory.
 
-### Post-Processing (Paper Methodology)
-To apply the exact Digital Signal Processing (DSP) steps described in the published paper (6th-order Butterworth low-pass filter at 10 Hz, followed by a Hilbert transform for amplitude envelope), run the standalone post-processing script:
+### Post-Processing
+To apply the Digital Signal Processing (DSP) steps (6th-order Butterworth low-pass filter at 10 Hz, followed by a Hilbert transform for amplitude envelope), run the standalone post-processing script:
 
 **On Linux / Raspberry Pi:**
 ```bash
@@ -100,7 +100,7 @@ To apply the exact Digital Signal Processing (DSP) steps described in the publis
 .\venv\Scripts\python.exe scripts\post_process_emg.py
 ```
 
-The script will automatically find the latest saved CSV in `sessions/`, generate a `_processed.csv` file with the mathematically filtered data, and open a PyQtGraph window so you can visually compare the raw hardware signal against the published filters.
+The script will automatically find the latest saved CSV in `sessions/`, generate a `_processed.csv` file with the mathematically filtered data, and open a PyQtGraph window so you can visually compare the raw hardware signal against the applied filters.
 
 ---
 

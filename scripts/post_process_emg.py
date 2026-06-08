@@ -25,7 +25,7 @@ def get_latest_session_csv(sessions_dir: str) -> str:
 def post_process_emg(csv_path: str):
     """
     Applies the post-acquisition DSP pipeline to a saved session CSV.
-    Methodology exactly matches the published paper:
+    Applies the following DSP steps:
     1. 6th-order Butterworth low-pass filter (10 Hz).
     2. Hilbert transform to calculate the amplitude envelope.
     """
@@ -72,7 +72,7 @@ def post_process_emg(csv_path: str):
         
     win = pg.GraphicsLayoutWidget(show=True, title="sEMG Post-Acquisition Processing")
     win.resize(1000, 600)
-    win.setWindowTitle('sEMG Signal Processing (Paper Methodology)')
+    win.setWindowTitle('sEMG Signal Processing')
     
     # Create a single plot area
     p1 = win.addPlot(title="Raw Hardware Signal vs Filtered vs Envelope")
