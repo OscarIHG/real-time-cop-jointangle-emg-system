@@ -53,7 +53,12 @@ The PowerShell script uses `uv` to download Python 3.11 and install dependencies
 ```
 
 ### 3. Hardware Pairing (First-time Linux Setup)
-If running on a fresh Raspberry Pi installation, you **must** pair the ESP32 manually before running the software. The OS will block the connection otherwise. Ensure the ESP32 is powered on, then run:
+If running on a fresh Raspberry Pi installation, you **must** pair the ESP32 manually via the terminal before running the software. 
+
+> [!NOTE]
+> It is highly probable that the Raspberry Pi Desktop Bluetooth GUI will fail to discover the ESP32 or result in a blank list, which is why we do it directly from the CLI.
+
+Ensure the ESP32 is powered on, then run the native CLI tool:
 
 ```bash
 bluetoothctl
@@ -86,6 +91,21 @@ Ensure the hardware components (ESP32, Camera, Force Plate) are connected. Verif
 3. Provide an optional **Base Filename**.
 4. Select **Start** to begin data acquisition.
 5. Select **Save CSV** after the acquisition period to export the synchronized data to the `sessions/` directory.
+
+### Post-Processing
+To apply the Digital Signal Processing (DSP) steps (6th-order Butterworth low-pass filter at 10 Hz, followed by a Hilbert transform for amplitude envelope), run the standalone post-processing script:
+
+**On Linux / Raspberry Pi:**
+```bash
+./venv/bin/python scripts/post_process_emg.py
+```
+
+**On Windows:**
+```powershell
+.\venv\Scripts\python.exe scripts\post_process_emg.py
+```
+
+The script will automatically find the latest saved CSV in `sessions/`, generate a `_processed.csv` file with the mathematically filtered data, and open a PyQtGraph window so you can visually compare the raw hardware signal against the applied filters.
 
 ---
 
@@ -127,5 +147,6 @@ real-time-cop-jointangle-emg-system/
 * **ESP32 Arduino Core Version (Critical):** You **must** compile the ESP32 firmware using **Arduino Core version 2.0.17** (or any 2.x release). Core 3.x introduced breaking changes to the Bluetooth Classic (SPP) stack that cause COM port hangs and connection failures on Windows 10/11. The device may appear paired but the serial link will never establish. For full firmware installation instructions, see [Module 2: ESP32 EMG in the Hardware Wiki](https://github.com/OscarIHG/real-time-cop-jointangle-emg-system/wiki/Module-2-ESP32-EMG).
 * **Windows Bluetooth Connections:** If the Bluetooth port becomes unresponsive, remove the device from Windows Bluetooth Settings, restart the ESP32, and pair it again. Update the `emg_com_port` parameter in `config.yaml` to the newly assigned **Outgoing** COM port (not the Incoming one). You can identify the correct port in Device Manager under Bluetooth → look for the port whose Hardware ID contains your ESP32's MAC address.
 * **Linux Bluetooth Connections:** Verify that the ESP32 is trusted and paired using the `bluetoothctl` utility prior to execution.
+* **Force Plate (Phidget) Access Denied (Linux):** If you see `Phidgets were detected, but access is denied`, Linux `udev` rules have not been applied to the connected device yet. Physically unplug the Phidget's USB cable from the Raspberry Pi, wait 2 seconds, and plug it back in.
 * **Camera Initialization:** Modify the `cam_index` parameter in `config.yaml` (index 0 typically corresponds to the integrated webcam).
 * **EMG Simulator Firmware:** An EMG simulator sketch is provided in `esp32_firmware/emg_simulator/` for testing the GUI without real EMG hardware. See [`esp32_firmware/README.md`](esp32_firmware/README.md) for details.
