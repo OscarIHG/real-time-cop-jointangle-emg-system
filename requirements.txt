@@ -3,19 +3,19 @@
 # =============================================================================
 
 # Core Numerical & Visualization Stack
-numpy
-scipy
-pandas
-pyqtgraph; sys_platform == 'win32'
-PyQt5; sys_platform == 'win32'
+numpy==2.4.*
+scipy==1.17.*
+pandas==3.0.*
+pyqtgraph==0.14.* ; sys_platform == 'win32'
+PyQt5==5.15.* ; sys_platform == 'win32'
 
 # Computer Vision & Pose
-opencv-python
+opencv-python==4.13.*
 mediapipe<=0.10.14
 
 # Hardware Interfaces
-Phidget22
-pyserial
+Phidget22==1.25.*
+pyserial==3.5.*
 
 # Utilities
-PyYAML
+PyYAML==6.0.*
