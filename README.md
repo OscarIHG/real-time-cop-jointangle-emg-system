@@ -55,8 +55,8 @@ The PowerShell script uses `uv` to download Python 3.11 and install dependencies
 ### 3. Hardware Pairing (First-time Linux Setup)
 If running on a fresh Raspberry Pi installation, you **must** pair the ESP32 manually via the terminal before running the software. 
 
-> [!WARNING]
-> Do NOT use the Raspberry Pi Desktop Bluetooth GUI to pair the ESP32. The visual Bluetooth manager often fails to discover Serial Port Profile (SPP) devices, resulting in a blank list.
+> [!NOTE]
+> It is highly probable that the Raspberry Pi Desktop Bluetooth GUI will fail to discover the ESP32 or result in a blank list, which is why we do it directly from the CLI.
 
 Ensure the ESP32 is powered on, then run the native CLI tool:
 
