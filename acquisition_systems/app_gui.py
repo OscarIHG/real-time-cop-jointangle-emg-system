@@ -307,7 +307,7 @@ class MainWindow(QtWidgets.QMainWindow):
                     
                 self.emg_curve.setData(plot_data)
                 right = len(self._emg_buf)
-                left  = max(0, right - self.emg_plot_window)
+                left  = right - self.emg_plot_window
                 self.p_emg.setXRange(left, left + self.emg_plot_window, padding=0)
 
             if cop_latest:
@@ -339,7 +339,7 @@ class MainWindow(QtWidgets.QMainWindow):
                 self._ang_buf = self._ang_buf[-max(self.angle_plot_window * 40, 2000):]
                 self.ang_curve.setData(self._ang_buf)
                 right = len(self._ang_buf)
-                left  = max(0, right - self.angle_plot_window)
+                left  = right - self.angle_plot_window
                 self.p_ang.setXRange(left, left + self.angle_plot_window, padding=0)
             
         except Exception:
