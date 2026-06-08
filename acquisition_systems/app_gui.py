@@ -25,6 +25,7 @@ from acquisition_systems.recorder import Recorder
 from acquisition_systems.workers.emg import EMGWorker
 from acquisition_systems.workers.cop import CoPWorker
 from acquisition_systems.workers.pose import PoseWorker
+from acquisition_systems.common.dsp import apply_fft_notch
 
 try:
     from mediapipe.python.solutions.pose import POSE_CONNECTIONS
@@ -298,7 +299,13 @@ class MainWindow(QtWidgets.QMainWindow):
             if emg_latest:
                 self._emg_buf.append(emg_latest.value)
                 self._emg_buf = self._emg_buf[-max(self.emg_plot_window * 25, 2000):]
-                self.emg_curve.setData(self._emg_buf)
+                
+                plot_data = np.array(self._emg_buf)
+                # Apply 60Hz Notch (FFT) automatically as per the paper methodology
+                if len(plot_data) > 100:
+                    plot_data = apply_fft_notch(plot_data, fs=1000.0, target_freq=60.0)
+                    
+                self.emg_curve.setData(plot_data)
                 right = len(self._emg_buf)
                 left  = max(0, right - self.emg_plot_window)
                 self.p_emg.setXRange(left, left + self.emg_plot_window, padding=0)
