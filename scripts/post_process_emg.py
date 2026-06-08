@@ -1,11 +1,12 @@
 import os
 import glob
+import sys
 import pandas as pd
 import numpy as np
-import matplotlib.pyplot as plt
+import pyqtgraph as pg
+from PyQt5 import QtWidgets, QtCore
 from scipy import signal
 from pathlib import Path
-import sys
 
 def get_latest_session_csv(sessions_dir: str) -> str:
     """Finds the most recently created CSV file in the sessions directory structure."""
@@ -64,24 +65,30 @@ def post_process_emg(csv_path: str):
     df_emg.to_csv(out_path, index=False)
     print(f"Saved processed data to: {out_path}")
     
-    # Plotting
-    plt.figure(figsize=(12, 6))
-    plt.plot(t, raw_signal, label='Hardware Output (Raw)', alpha=0.5, color='gray')
-    plt.plot(t, smoothed_signal, label='Butterworth Low-pass (10 Hz)', alpha=0.8, color='blue')
-    plt.plot(t, amplitude_envelope, label='Hilbert Amplitude Envelope', linewidth=2, color='red')
+    # --- PyQtGraph Visualization ---
+    app = QtWidgets.QApplication.instance()
+    if app is None:
+        app = QtWidgets.QApplication(sys.argv)
+        
+    win = pg.GraphicsLayoutWidget(show=True, title="sEMG Post-Acquisition Processing")
+    win.resize(1000, 600)
+    win.setWindowTitle('sEMG Signal Processing (Paper Methodology)')
     
-    plt.title('sEMG Post-Acquisition Processing (Paper Methodology)')
-    plt.xlabel('Time (s)')
-    plt.ylabel('Amplitude')
-    plt.legend()
-    plt.grid(True)
-    plt.tight_layout()
+    # Create a single plot area
+    p1 = win.addPlot(title="Raw Hardware Signal vs Filtered vs Envelope")
+    p1.setLabel('bottom', "Time", units='s')
+    p1.setLabel('left', "Amplitude", units='V')
+    p1.addLegend()
+    p1.showGrid(x=True, y=True)
     
-    # Save plot next to the processed CSV
-    plot_path = csv_path.replace(".csv", "_plot.png")
-    plt.savefig(plot_path)
-    print(f"Saved plot to: {plot_path}")
-    plt.show()
+    # Plot the three signals
+    p1.plot(t, raw_signal, pen=pg.mkPen(color=(100, 100, 100, 150), width=1), name="Hardware Output (Raw)")
+    p1.plot(t, smoothed_signal, pen=pg.mkPen(color=(0, 114, 178), width=2), name="Butterworth Low-pass (10 Hz)")
+    p1.plot(t, amplitude_envelope, pen=pg.mkPen(color=(213, 94, 0), width=3), name="Hilbert Amplitude Envelope")
+    
+    print("Opening PyQtGraph window. Close the window to exit the script.")
+    if sys.flags.interactive != 1:
+        QtWidgets.QApplication.instance().exec_()
 
 if __name__ == "__main__":
     base_dir = Path(__file__).resolve().parent.parent
