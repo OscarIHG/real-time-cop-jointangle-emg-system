@@ -29,7 +29,7 @@ else:
     _pose_import_error = None
 
 from acquisition_systems.common.types import PoseSample, AngleSample
-from acquisition_systems.common.utils import put_latest
+from acquisition_systems.common.utils import put_latest, pelvic_obliquity_deg_from_landmarks
 from acquisition_systems.common.config import ConfigDict
 
 
@@ -43,31 +43,7 @@ def _calculate_pelvic_obliquity_mediapipe(landmarks: np.ndarray) -> float:
     Returns:
         Angle in degrees (positive = tilt towards right)
     """
-    if landmarks.shape[0] < 25:  # Ensure we have at least 25 landmarks
-        return 0.0
-        
-    # Hip landmarks in MediaPipe
-    left_hip = landmarks[23]   # Left hip
-    right_hip = landmarks[24]  # Right hip
-    
-    # Check if landmarks are valid (not NaN)
-    if np.any(np.isnan([left_hip, right_hip])):
-        return 0.0
-    
-    # Calculate vector from right hip to left hip
-    hip_vector = left_hip - right_hip
-    
-    # Calculate angle with respect to horizontal
-    angle_rad = np.arctan2(hip_vector[1], hip_vector[0])
-    angle_deg = np.degrees(angle_rad)
-    
-    # Normalize to range [-90, 90]
-    while angle_deg > 90:
-        angle_deg -= 180
-    while angle_deg < -90:
-        angle_deg += 180
-    
-    return float(angle_deg)
+    return pelvic_obliquity_deg_from_landmarks(landmarks)
 
 
 class PoseWorker:
@@ -93,7 +69,7 @@ class PoseWorker:
         self.idx = cam_index
         self.cam_w = int(width)
         self.cam_h = int(height)
-        self.fps = int(fps)
+        self.fps = max(1, int(fps))
         
         # MediaPipe configuration - OPTIMIZED for performance
         if config:
@@ -112,8 +88,8 @@ class PoseWorker:
             self.smooth_segmentation = False
             self.static_image_mode = False
         
-        self.landmarks_q: queue.Queue = queue.Queue(maxsize=10000)
-        self.angle_q: queue.Queue = queue.Queue(maxsize=10000)
+        self.landmarks_q: queue.Queue = queue.Queue(maxsize=1)
+        self.angle_q: queue.Queue = queue.Queue(maxsize=1)
         
         self._stop = threading.Event()
         self._thread: threading.Thread | None = None
@@ -225,20 +201,13 @@ class PoseWorker:
         """Main acquisition and processing loop - OPTIMIZED for performance."""
         frame_count = 0
         start_time = time.perf_counter()
-        skip_counter = 0  # For frame skipping optimization
-        
         try:
             while not self._stop.is_set():
                 ok, frame = self._cam.read()
                 if not ok:
                     time.sleep(0.01)
                     continue
-                
-                # PERFORMANCE OPTIMIZATION: Skip every other frame if processing is slow
-                skip_counter += 1
-                if skip_counter % 2 == 0:
-                    continue
-                
+
                 try:
                     # Process with MediaPipe (includes flip correction)
                     landmarks_px, pose_detected = self._process_frame(frame)
@@ -246,17 +215,14 @@ class PoseWorker:
                     
                     if pose_detected:
                         # Publish pose sample (33 landmarks)
-                        try:
-                            self.landmarks_q.put_nowait(PoseSample(t=t, landmarks=landmarks_px))
-                        except queue.Full:
-                            pass
+                        put_latest(
+                            self.landmarks_q,
+                            PoseSample(t=t, landmarks=landmarks_px),
+                        )
                         
                         # Calculate and publish pelvic obliquity angle
                         angle_deg = _calculate_pelvic_obliquity_mediapipe(landmarks_px)
-                        try:
-                            self.angle_q.put_nowait(AngleSample(t=t, deg=angle_deg))
-                        except queue.Full:
-                            pass
+                        put_latest(self.angle_q, AngleSample(t=t, deg=angle_deg))
                     
                     frame_count += 1
                     
@@ -292,11 +258,15 @@ class PoseWorker:
     # ---------- Public API ----------
     def start(self):
         """Start pose acquisition with MediaPipe."""
-        print("[PoseWorker] Starting OPTIMIZED MediaPipe with inversion fix...")
-        
         self._stop.clear()
-        self._open_camera()
-        self._init_mediapipe()
+        try:
+            self._open_camera()
+            self._init_mediapipe()
+        except Exception:
+            # _open_camera may succeed while MediaPipe initialization fails.
+            # Release the camera immediately so a retry does not leak a device.
+            self._release_resources()
+            raise
         
         self._thread = threading.Thread(target=self._loop, daemon=True)
         self._thread.start()
@@ -311,5 +281,18 @@ class PoseWorker:
         if self._thread:
             self._thread.join(timeout=2.0)
             self._thread = None
-        
+        self._release_resources()
         print("[PoseWorker] Stopped correctly")
+
+    def _release_resources(self):
+        """Release camera and MediaPipe resources exactly once."""
+        try:
+            if self._cam is not None:
+                self._cam.release()
+        finally:
+            self._cam = None
+        try:
+            if self._pose_processor is not None:
+                self._pose_processor.close()
+        finally:
+            self._pose_processor = None

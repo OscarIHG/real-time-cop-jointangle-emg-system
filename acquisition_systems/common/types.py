@@ -10,13 +10,13 @@ import numpy as np
 @dataclass
 class EmgSample:
     t: float       # timestamp in seconds (perf_counter)
-    value: float   # voltage between 0 and 5 V
+    value: float   # voltage between 0 and 3.3 V
 
 @dataclass
 class CopSample:
     t: float       # timestamp in seconds
-    x: float       # CoP anteroposterior position (cm)
-    y: float       # CoP mediolateral position (cm)
+    x: float       # CoP mediolateral (left/right) position (cm)
+    y: float       # CoP anteroposterior (front/back) position (cm)
     kg: float      # total mass estimate in kilograms
 
 @dataclass

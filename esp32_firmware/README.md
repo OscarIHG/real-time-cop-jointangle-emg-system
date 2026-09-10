@@ -23,7 +23,7 @@ This directory contains Arduino sketches for the ESP32 microcontroller used in t
 
 ## Production Firmware (`esp32_firmware.ino`)
 
-The main firmware that reads a **real analog EMG signal** from pin `A0` at 1000 Hz and transmits it over Bluetooth Classic (SPP).
+The main firmware that reads a **real analog EMG signal** from pin `A0` at 1000 Hz and transmits it over Bluetooth Classic (SPP). The ADC input and transmitted voltage range are limited to 0–3.3 V.
 
 Use this when your ESP32 is connected to the physical EMG amplifier circuit.
 
@@ -40,8 +40,8 @@ A test firmware that generates a **synthetic EMG signal** over Bluetooth Classic
 | Baseline        | ~0.5 V with white noise                  |
 | Burst amplitude | ~2.5 V peak                              |
 | Burst interval  | Every 3 seconds (600 ms duration)        |
-| Sample rate     | ~500 Hz                                  |
-| Output range    | 0.0 – 5.0 V (clamped)                   |
+| Sample rate     | 1000 Hz                                  |
+| Output range    | 0.0 – 3.3 V (clamped)                   |
 
 ### LED Feedback
 

@@ -11,8 +11,19 @@ Write-Host "========================================================"
 # 1. Download uv if not present
 $uv_exe = ".\uv_bin\uv.exe"
 if (-not (Test-Path $uv_exe)) {
-    Write-Host "Downloading 'uv' (ultrafast python package manager)..."
-    Invoke-WebRequest -Uri "https://github.com/astral-sh/uv/releases/latest/download/uv-x86_64-pc-windows-msvc.zip" -OutFile "uv.zip"
+    $uv_version = if ($env:UV_VERSION) { $env:UV_VERSION } else { "0.8.14" }
+    $uv_sha256 = $env:UV_SHA256
+    if ([string]::IsNullOrWhiteSpace($uv_sha256)) {
+        throw "Set UV_SHA256 to the vendor-published SHA-256 for uv v$uv_version before running setup."
+    }
+    $uv_url = "https://github.com/astral-sh/uv/releases/download/$uv_version/uv-x86_64-pc-windows-msvc.zip"
+    Write-Host "Downloading verified uv $uv_version..."
+    Invoke-WebRequest -Uri $uv_url -OutFile "uv.zip"
+    $actual_hash = (Get-FileHash -Algorithm SHA256 -LiteralPath "uv.zip").Hash
+    if ($actual_hash -ne $uv_sha256.ToUpperInvariant()) {
+        Remove-Item -LiteralPath "uv.zip" -Force
+        throw "uv.zip SHA-256 mismatch."
+    }
     Expand-Archive -Path "uv.zip" -DestinationPath "uv_bin" -Force
     Remove-Item "uv.zip"
 }

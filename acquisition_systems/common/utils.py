@@ -35,18 +35,31 @@ def get_latest(q: queue.Queue, default=None):
 
 def pelvic_obliquity_deg_from_landmarks(landmarks_px: np.ndarray) -> float:
     """
-    Compute angle of vector (Hip 11 -> Hip 12) relative to +x, with y up (invert image y).
-    Utiliza el formato MoveNet (17 keypoints), donde 11=L_Hip y 12=R_Hip.
+    Compute pelvic obliquity using the available landmark convention.
+
+    MediaPipe uses landmarks 23/24 for left/right hip. The legacy MoveNet
+    convention uses 11/12. Image coordinates have y pointing down, so y is
+    inverted before computing the angle. Invalid landmarks return NaN rather
+    than silently becoming a level pelvis.
     Normalize to [-90, 90] for tilt-like interpretation.
     """
-    # MoveNet tiene 17 landmarks. Necesitamos hasta el índice 12.
-    if landmarks_px is None or landmarks_px.shape[0] <= 12:
+    if landmarks_px is None:
         return float("nan")
-    
-    # Índices de MoveNet para Caderas: 11 = Izquierda, 12 = Derecha
-    # Los landmarks_px entrantes deben tener formato [x, y]
-    xL, yL = landmarks_px[11, 0], landmarks_px[11, 1]
-    xR, yR = landmarks_px[12, 0], landmarks_px[12, 1]
+
+    points = np.asarray(landmarks_px)
+    if points.ndim != 2 or points.shape[1] < 2:
+        return float("nan")
+    if points.shape[0] >= 25:
+        left_idx, right_idx = 23, 24
+    elif points.shape[0] > 12:
+        left_idx, right_idx = 11, 12
+    else:
+        return float("nan")
+
+    xL, yL = points[left_idx, :2]
+    xR, yR = points[right_idx, :2]
+    if not np.all(np.isfinite([xL, yL, xR, yR])):
+        return float("nan")
 
     vx = xR - xL
     vy = -(yR - yL)  # convert image y (down) to Cartesian y (up)

@@ -58,7 +58,7 @@ class CoPWorker:
         else:
             raise ValueError("cop_gain must be a float or a list/tuple of 4 floats.")
 
-        self.dt_ms = int(data_interval_ms)
+        self.dt_ms = max(1, int(data_interval_ms))
         self.x_dist_cm = float(x_dist_cm)   # total width
         self.y_dist_cm = float(y_dist_cm)   # total height
 
@@ -67,8 +67,9 @@ class CoPWorker:
         self.flip_y = bool(flip_y)
         self.swap_xy = bool(swap_xy)
 
-        self.queue: queue.Queue = queue.Queue(maxsize=10000)
+        self.queue: queue.Queue = queue.Queue(maxsize=1)
         self._stop = threading.Event()
+        self._state_lock = threading.RLock()
 
         # Four Phidget channels (0..3)
         self._ch = [VoltageRatioInput() for _ in range(4)]
@@ -78,6 +79,7 @@ class CoPWorker:
 
         # State
         self._offset = [0.0, 0.0, 0.0, 0.0]
+        self._offsets_provided = offsets is not None
         if offsets is not None:
             if not isinstance(offsets, (list, tuple)) or len(offsets) != 4:
                 raise ValueError("offsets must be a list/tuple of 4 floats if provided.")
@@ -89,42 +91,44 @@ class CoPWorker:
 
     # ---------- handlers ----------
     def _on_vr(self, ch: "VoltageRatioInput", vr: float):
-        idx = ch.getChannel()
-        if not self._cal[idx]:
+        if self._stop.is_set():
             return
+        idx = ch.getChannel()
+        with self._state_lock:
+            if not self._cal[idx]:
+                return
 
-        kg = (vr - self._offset[idx]) * self.gain[idx]
-        self._kg[idx] = kg
-        self._n[idx]  = kg * 9.81  # Newtons
+            kg = (vr - self._offset[idx]) * self.gain[idx]
+            self._kg[idx] = kg
+            self._n[idx]  = kg * 9.81  # Newtons
 
-        # Recalculate CoP with each update
-        f_total = sum(self._n)
-        kg_total = sum(self._kg)
-        if f_total <= 1e-9:
-            copx = 0.0
-            copy = 0.0
-        else:
-            # Cell convention:
+            # Recalculate CoP from one consistent snapshot. Cell convention:
             #  0 ----- 1
             #  |       |
             #  3 ----- 2
-            m_ap = -self._n[0] - self._n[3] + self._n[1] + self._n[2]  # anteroposterior
-            m_ml =  self._n[2] + self._n[3] - self._n[0] - self._n[1]  # mediolateral
-            copx = (self.x_dist_cm / 2.0) * (m_ap / f_total)
-            copy = (self.y_dist_cm / 2.0) * (m_ml / f_total)
+            f_total = sum(self._n)
+            kg_total = sum(self._kg)
+            if f_total <= 1e-9:
+                copx = 0.0
+                copy = 0.0
+            else:
+                m_ap = -self._n[0] - self._n[1] + self._n[2] + self._n[3]
+                m_ml = -self._n[0] + self._n[1] + self._n[2] - self._n[3]
+                # x is left/right (mediolateral), y is front/back
+                # (anteroposterior). Keep distance axes aligned with the GUI.
+                copx = (self.x_dist_cm / 2.0) * (m_ml / f_total)
+                copy = (self.y_dist_cm / 2.0) * (m_ap / f_total)
 
-        # Apply orientation flags
-        if self.swap_xy:
-            copx, copy = copy, copx
-        if self.flip_x:
-            copx = -copx
-        if self.flip_y:
-            copy = -copy
+            # Apply orientation flags
+            if self.swap_xy:
+                copx, copy = copy, copx
+            if self.flip_x:
+                copx = -copx
+            if self.flip_y:
+                copy = -copy
 
-        try:
-            self.queue.put_nowait(CopSample(t=time.perf_counter(), x=copx, y=copy, kg=kg_total))
-        except queue.Full:
-            pass
+            sample = CopSample(t=time.perf_counter(), x=copx, y=copy, kg=kg_total)
+        put_latest(self.queue, sample)
 
 
     def _tare(self, samples: int = 16):
@@ -132,7 +136,7 @@ class CoPWorker:
         Average 'samples' readings per channel to estimate voltage offset.
         If offsets were provided in __init__, simply mark as calibrated.
         """
-        if any(self._offset):
+        if self._offsets_provided:
             for i in range(4):
                 self._cal[i] = True
             return
@@ -156,10 +160,18 @@ class CoPWorker:
     # ---------- public API ----------
     def start(self):
         self._stop.clear()
-        for c in self._ch:
-            c.openWaitForAttachment(5000)
-            c.setDataInterval(self.dt_ms)
-        self._tare()
+        with self._state_lock:
+            self._kg = [0.0, 0.0, 0.0, 0.0]
+            self._n = [0.0, 0.0, 0.0, 0.0]
+            self._cal = [False, False, False, False]
+        try:
+            for c in self._ch:
+                c.openWaitForAttachment(5000)
+                c.setDataInterval(self.dt_ms)
+            self._tare()
+        except Exception:
+            self.stop()
+            raise
 
     def stop(self):
         self._stop.set()
