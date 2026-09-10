@@ -121,14 +121,16 @@ if __name__ == "__main__":
     base_dir = Path(__file__).resolve().parent.parent
     sessions_dir = os.path.join(base_dir, "sessions")
     
-    target_csv = None
-    if len(sys.argv) > 1:
-        target_csv = sys.argv[1]
+    show_plot = "--no-show" not in sys.argv
+    positional = [a for a in sys.argv[1:] if not a.startswith("--")]
+
+    if positional:
+        target_csv = positional[0]
     else:
         target_csv = get_latest_session_csv(sessions_dir)
-        
+
     if target_csv and os.path.exists(target_csv):
-        post_process_emg(target_csv, show_plot="--no-show" not in sys.argv)
+        post_process_emg(target_csv, show_plot=show_plot)
     else:
         print("No CSV files found in the sessions directory to process.")
-        print("Usage: python post_process_emg.py [path_to_csv]")
+        print("Usage: python post_process_emg.py [path_to_csv] [--no-show]")
