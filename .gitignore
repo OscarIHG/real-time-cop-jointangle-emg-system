@@ -28,6 +28,14 @@ venv.bak/
 # Output sessions
 sessions/
 
+# uv binaries downloaded by setup.ps1 (Windows)
+uv_bin/
+uv.zip
+
+# Micromamba and its root prefix downloaded by setup.sh (Linux)
+bin/
+.mamba_root/
+
 # Python cache files
 __pycache__/
 *.py[cod]
