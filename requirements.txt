@@ -11,7 +11,7 @@ PyQt5==5.15.* ; sys_platform == 'win32'
 
 # Computer Vision & Pose
 opencv-python==4.13.*
-mediapipe<=0.10.14
+mediapipe>=0.10.14,<0.11
 
 # Hardware Interfaces
 Phidget22==1.25.*

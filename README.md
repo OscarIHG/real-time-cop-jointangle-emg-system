@@ -20,7 +20,7 @@ For complete hardware specifications, assembly instructions, schematics, and the
 This repository provides a software implementation designed for Raspberry Pi 4 (Raspberry Pi OS 64-bit) and Windows systems.
 
 * **Data Visualization:** Utilizes PyQt5 and PyQtGraph with OpenGL rendering for multi-plot data visualization.
-* **EMG Sampling:** Includes an ESP32 firmware sketch (`esp32_firmware/`) configured for a 1000 Hz sampling rate using hardware timers.
+* **EMG Sampling:** Includes an ESP32 firmware sketch (`esp32_firmware/`) configured for a 1000 Hz sampling rate using a deadline-based microsecond scheduler.
 * **Bluetooth Connectivity:** Implements `socket.AF_BLUETOOTH` (Linux) and `pyserial` (Windows) executed in a dedicated background thread to manage hardware communication without blocking the main process.
 * **Pose Estimation:** Integrates MediaPipe to track skeletal joint angles dynamically.
 * **Data Recording:** Aligns data streams from the force plate, ESP32, and camera, exporting the synchronized data into a CSV format.
@@ -45,12 +45,20 @@ The setup script installs required system dependencies, downloads Micromamba, an
 chmod +x setup.sh
 ./setup.sh
 ```
+The Linux setup verifies downloaded installers before executing them. Export the
+vendor-published checksums first:
+```bash
+export PHIDGETS_INSTALLER_SHA256="<sha256>"
+export MICROMAMBA_SHA256="<sha256>"
+```
 
 **For Windows 10/11:**
 The PowerShell script uses `uv` to download Python 3.11 and install dependencies. Execute from a PowerShell terminal:
 ```powershell
 .\setup.ps1
 ```
+If `uv` is not already present in `uv_bin`, set `UV_VERSION` and the matching
+`UV_SHA256` before running the script.
 
 ### 3. Hardware Pairing (First-time Linux Setup)
 If running on a fresh Raspberry Pi installation, you **must** pair the ESP32 manually via the terminal before running the software. 
@@ -105,7 +113,15 @@ To apply the Digital Signal Processing (DSP) steps (6th-order Butterworth low-pa
 .\venv\Scripts\python.exe scripts\post_process_emg.py
 ```
 
-The script will automatically find the latest saved CSV in `sessions/`, generate a `_processed.csv` file with the mathematically filtered data, and open a PyQtGraph window so you can visually compare the raw hardware signal against the applied filters.
+The script will automatically find the latest saved CSV in `sessions/`, generate a `_processed.csv` file with the notch-filtered, mathematically filtered data, and open a PyQtGraph window so you can visually compare the raw hardware signal against the applied filters. Use `--no-show` on headless Raspberry Pi sessions.
+
+### Docker quick start
+
+`quick-start.sh` uses the checked-in `Dockerfile` and `docker-compose.yml`.
+The compose file persists `sessions/` and mounts the X11/DBus sockets, but it
+does not guess host camera or Phidget device paths. Add the required
+`devices:` mappings for the specific Raspberry Pi before using Docker with
+physical hardware. Do not grant broad host devices or privileged mode.
 
 ---
 

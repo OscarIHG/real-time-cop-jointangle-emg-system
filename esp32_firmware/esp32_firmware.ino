@@ -26,9 +26,20 @@ bool isAcquiring = false;
 unsigned long previousBlinkMillis = 0;
 const long blinkInterval = 500; // Blink interval in milliseconds
 
-// Variables for precise 1000 Hz sampling
-unsigned long previousMicros = 0;
-const unsigned long sampleIntervalMicros = 1000; // 1000 microseconds = 1ms = 1000 Hz
+// Hardware timer for precise 1000 Hz sampling. The ISR only signals the main
+// loop; ADC reads and Bluetooth writes are intentionally kept out of the ISR.
+hw_timer_t *sampleTimer = nullptr;
+portMUX_TYPE timerMux = portMUX_INITIALIZER_UNLOCKED;
+volatile uint32_t sampleTicks = 0;
+const float adcReferenceVoltage = 3.3f;
+
+void IRAM_ATTR onSampleTimer() {
+  portENTER_CRITICAL_ISR(&timerMux);
+  if (sampleTicks < 1000) {
+    sampleTicks++;
+  }
+  portEXIT_CRITICAL_ISR(&timerMux);
+}
 
 void setup() {
   Serial.begin(115200);
@@ -40,6 +51,11 @@ void setup() {
   
   // ESP32 has a 12-bit ADC by default (range 0 to 4095)
   analogReadResolution(12);
+  analogSetPinAttenuation(emgPin, ADC_11db);
+  sampleTimer = timerBegin(0, 80, true);  // 80 MHz / 80 = 1 MHz
+  timerAttachInterrupt(sampleTimer, &onSampleTimer, true);
+  timerAlarmWrite(sampleTimer, 1000, true); // 1000 us = 1000 Hz
+  timerAlarmDisable(sampleTimer);
 }
 
 void loop() {
@@ -49,11 +65,19 @@ void loop() {
     
     if (cmd == '1') {          // start_token configured in config.yaml
       isAcquiring = true;
+      portENTER_CRITICAL(&timerMux);
+      sampleTicks = 0;
+      portEXIT_CRITICAL(&timerMux);
+      timerAlarmEnable(sampleTimer);
       digitalWrite(ledPin, HIGH); // Solid LED when acquiring
       Serial.println("Python sent START command (1).");
     } 
     else if (cmd == '2') {     // stop_token configured in config.yaml
       isAcquiring = false;
+      timerAlarmDisable(sampleTimer);
+      portENTER_CRITICAL(&timerMux);
+      sampleTicks = 0;
+      portEXIT_CRITICAL(&timerMux);
       digitalWrite(ledPin, LOW); // Turn off LED
       Serial.println("Python sent STOP command (2).");
     }
@@ -62,17 +86,20 @@ void loop() {
   // 2. State Machine Handling
   if (isAcquiring) {
     // --- Acquisition Mode ---
-    unsigned long currentMicros = micros();
-    
-    // Ultra-precise timer without blocking the processor (no delay() used!)
-    if (currentMicros - previousMicros >= sampleIntervalMicros) {
-      previousMicros = currentMicros;
-      
+    bool due = false;
+    portENTER_CRITICAL(&timerMux);
+    due = sampleTicks > 0;
+    if (due) {
+      sampleTicks--;
+    }
+    portEXIT_CRITICAL(&timerMux);
+    if (due) {
       // Read pin value
       float analogValue = analogRead(emgPin);
       
-      // Convert to voltage (using 5V multiplier as requested in original code)
-      float voltage = 5.0 * analogValue / 4095.0;
+      // ESP32 ADC input is 3.3 V maximum. The analog front-end must also
+      // keep the pin within this range.
+      float voltage = adcReferenceVoltage * analogValue / 4095.0f;
       
       // Send data to Python (prints a CRLF newline which Python reads)
       SerialBT.println(voltage, 4);

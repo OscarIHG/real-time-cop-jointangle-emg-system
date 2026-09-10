@@ -15,39 +15,53 @@ Usage in GUI:
 """
 import os
 import csv
-import math
-from typing import Optional, List, Literal
+import re
+from collections import deque
+from typing import Optional, List, Literal, Iterable
 import numpy as np
 
 from acquisition_systems.common.types import EmgSample, CopSample, PoseSample, AngleSample
+from acquisition_systems.common.dsp import apply_fft_notch
 
 LM_COUNT = 33  # MediaPipe Pose uses 33 landmarks
 
 
 class Recorder:
-    def __init__(self):
+    def __init__(self, max_samples_per_stream: int = 1_000_000):
+        if int(max_samples_per_stream) <= 0:
+            raise ValueError("max_samples_per_stream must be greater than zero")
+        self.max_samples_per_stream = int(max_samples_per_stream)
+        self.dropped_counts = {"emg": 0, "cop": 0, "pose": 0, "angle": 0}
+        self.clear()
+
+    def clear(self):
+        """Start a new recording without retaining samples from prior sessions."""
         # Buffers storing samples at their original sampling rate
-        self._emg: List[EmgSample] = []
-        self._cop: List[CopSample] = []
-        self._pose: List[PoseSample] = []
-        self._ang: List[AngleSample] = []
+        self._emg = deque(maxlen=self.max_samples_per_stream)
+        self._cop = deque(maxlen=self.max_samples_per_stream)
+        self._pose = deque(maxlen=self.max_samples_per_stream)
+        self._ang = deque(maxlen=self.max_samples_per_stream)
+        self.dropped_counts = {"emg": 0, "cop": 0, "pose": 0, "angle": 0}
+
+    def _append(self, name: str, buffer, sample) -> None:
+        if sample is None:
+            return
+        if len(buffer) == buffer.maxlen:
+            self.dropped_counts[name] += 1
+        buffer.append(sample)
 
     # -------- push APIs (call only when a new sample is available) --------
     def push_emg(self, s: Optional[EmgSample]):  # sample is (timestamp, value)
-        if s is not None:
-            self._emg.append(s)
+        self._append("emg", self._emg, s)
 
     def push_cop(self, s: Optional[CopSample]):  # sample is (timestamp, x, y, kg)
-        if s is not None:
-            self._cop.append(s)
+        self._append("cop", self._cop, s)
 
     def push_pose(self, s: Optional[PoseSample]):  # sample is (timestamp, landmarks(33,2))
-        if s is not None:
-            self._pose.append(s)
+        self._append("pose", self._pose, s)
 
     def push_angle(self, s: Optional[AngleSample]):  # sample is (timestamp, degrees)
-        if s is not None:
-            self._ang.append(s)
+        self._append("angle", self._ang, s)
 
     # -------- export merged streams --------
     def to_csv_merged(
@@ -66,6 +80,7 @@ class Recorder:
 
         Returns: full file path saved.
         """
+        base_name = _safe_base_name(base_name)
         if not base_name.lower().endswith(".csv"):
             base_name += ".csv"
         os.makedirs(out_dir, exist_ok=True)
@@ -73,12 +88,25 @@ class Recorder:
 
         # Pick the reference timeline
         ref_name, ref_times = self._choose_reference(reference)
+        if ref_times.size:
+            ref_origin = float(ref_times[0])
+        else:
+            ref_origin = 0.0
+
+        emg_samples = list(self._emg)
+        cop_samples = list(self._cop)
+        pose_samples = list(self._pose)
+        angle_samples = list(self._ang)
+        emg_notch = _notch_values(emg_samples)
 
         # Prepare iterators; assume timestamps never decrease
         emg_i = cop_i = pose_i = ang_i = -1
         emg_last = cop_last = pose_last = ang_last = None
 
-        header = ["time_s", "emg_V", "cop_x_cm", "cop_y_cm", "weight_kg", "angle_deg"]
+        header = [
+            "time_s", "emg_V", "emg_notch_V", "cop_x_cm", "cop_y_cm",
+            "weight_kg", "angle_deg"
+        ]
         for i in range(LM_COUNT):
             header += [f"lm{i}_x", f"lm{i}_y"]
 
@@ -87,10 +115,10 @@ class Recorder:
             w.writerow(header)
 
             # Pre-extract arrays of timestamps for quick traversal
-            emg_t = np.array([s.t for s in self._emg], dtype=float)
-            cop_t = np.array([s.t for s in self._cop], dtype=float)
-            pose_t = np.array([s.t for s in self._pose], dtype=float)
-            ang_t = np.array([s.t for s in self._ang], dtype=float)
+            emg_t = np.array([s.t for s in emg_samples], dtype=float)
+            cop_t = np.array([s.t for s in cop_samples], dtype=float)
+            pose_t = np.array([s.t for s in pose_samples], dtype=float)
+            ang_t = np.array([s.t for s in angle_samples], dtype=float)
 
             for t in ref_times:
                 # Advance each stream up to time <= current t
@@ -98,22 +126,27 @@ class Recorder:
                     # Indices increase strictly; advance while next timestamp <= t
                     while emg_i + 1 < emg_t.size and emg_t[emg_i + 1] <= t:
                         emg_i += 1
-                        emg_last = self._emg[emg_i]
+                        emg_last = emg_samples[emg_i]
                 if cop_t.size:
                     while cop_i + 1 < cop_t.size and cop_t[cop_i + 1] <= t:
                         cop_i += 1
-                        cop_last = self._cop[cop_i]
+                        cop_last = cop_samples[cop_i]
                 if pose_t.size:
                     while pose_i + 1 < pose_t.size and pose_t[pose_i + 1] <= t:
                         pose_i += 1
-                        pose_last = self._pose[pose_i]
+                        pose_last = pose_samples[pose_i]
                 if ang_t.size:
                     while ang_i + 1 < ang_t.size and ang_t[ang_i + 1] <= t:
                         ang_i += 1
-                        ang_last = self._ang[ang_i]
+                        ang_last = angle_samples[ang_i]
 
                 # Create a row using the most recent samples
                 emg_v = _f(emg_last.value) if emg_last else float("nan")
+                emg_notch_v = (
+                    _f(emg_notch[emg_i])
+                    if emg_last is not None and emg_i >= 0
+                    else float("nan")
+                )
                 cop_x = _f(cop_last.x) if cop_last else float("nan")
                 cop_y = _f(cop_last.y) if cop_last else float("nan")
                 cop_kg = _f(cop_last.kg) if cop_last else float("nan")
@@ -124,7 +157,7 @@ class Recorder:
                     n = min(LM_COUNT, pose_last.landmarks.shape[0])
                     lm[:n, :2] = pose_last.landmarks[:n, :2]
 
-                row = [float(t), emg_v, cop_x, cop_y, cop_kg, ang_d]
+                row = [float(t - ref_origin), emg_v, emg_notch_v, cop_x, cop_y, cop_kg, ang_d]
                 row.extend(lm.reshape(-1).tolist())
                 w.writerow(row)
 
@@ -137,6 +170,7 @@ class Recorder:
         Returns: list of file paths.
         """
         os.makedirs(out_dir, exist_ok=True)
+        base_name = _safe_base_name(base_name).removesuffix(".csv")
         files = []
 
         def save(path, header, rows):
@@ -147,8 +181,13 @@ class Recorder:
             files.append(path)
 
         # EMG stream
-        emg_rows = [[_f(s.t), _f(s.value)] for s in self._emg]
-        save(os.path.join(out_dir, f"{base_name}_emg.csv"), ["time_s", "emg_V"], emg_rows)
+        emg_samples = list(self._emg)
+        emg_notch = _notch_values(emg_samples)
+        emg_rows = [
+            [_f(s.t), _f(s.value), _f(emg_notch[i])]
+            for i, s in enumerate(emg_samples)
+        ]
+        save(os.path.join(out_dir, f"{base_name}_emg.csv"), ["time_s", "emg_V", "emg_notch_V"], emg_rows)
 
         # CoP stream
         cop_rows = [[_f(s.t), _f(s.x), _f(s.y), _f(s.kg)] for s in self._cop]
@@ -195,3 +234,34 @@ def _f(x):
         return float(x)
     except Exception:
         return float("nan")
+
+
+def _safe_base_name(base_name: str) -> str:
+    """Return a filename component that cannot escape the output directory."""
+    name = os.path.basename(str(base_name).strip())
+    name = re.sub(r"[^A-Za-z0-9_.-]", "_", name)
+    if not name or name in {".", ".."}:
+        raise ValueError("base_name must contain a valid filename")
+    return name
+
+
+def _notch_values(samples: Iterable[EmgSample]) -> np.ndarray:
+    """Filter a native-rate EMG stream using the rate encoded by its timestamps."""
+    values = list(samples)
+    if not values:
+        return np.empty(0, dtype=float)
+    raw = np.asarray([float(s.value) for s in values], dtype=float)
+    if len(values) < 8:
+        return raw.copy()
+    timestamps = np.asarray([float(s.t) for s in values], dtype=float)
+    deltas = np.diff(timestamps)
+    valid = deltas[np.isfinite(deltas) & (deltas > 0)]
+    if valid.size == 0:
+        return raw.copy()
+    fs = 1.0 / float(np.median(valid))
+    if fs <= 120.0:
+        return raw.copy()
+    try:
+        return apply_fft_notch(raw, fs=fs, target_freq=60.0)
+    except (ValueError, RuntimeError):
+        return raw.copy()

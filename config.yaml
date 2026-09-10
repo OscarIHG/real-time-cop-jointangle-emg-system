@@ -7,7 +7,7 @@ emg_mac: "68:FE:71:80:1F:CA"
 emg_com_port: "COM4"        # Windows ONLY: the COM port assigned to the paired ESP32
 emg_rfcomm_channel: 1
 emg_vmin: 0.0
-emg_vmax: 5.0
+emg_vmax: 3.3
 emg_allow_lf: false         # set to true if your firmware sends LF instead of CRLF
 emg_start_token: "1"
 emg_stop_token: "2"
@@ -22,6 +22,7 @@ cop_interval_ms: 20         # 50 Hz
 cop_flip_x: false
 cop_flip_y: true   
 cop_swap_xy: false
+recording_max_samples_per_stream: 1000000
 
 # --- Pose / Camera ---
 # cam_index: Use 0 for built-in webcams, or 1/2 for connected USB cameras (especially on Windows).

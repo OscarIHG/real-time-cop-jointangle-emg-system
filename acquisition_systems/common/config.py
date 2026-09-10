@@ -6,6 +6,7 @@ Reads config.yaml at repo root; provides sane defaults if keys are missing.
 
 from __future__ import annotations
 import os
+import math
 from dataclasses import dataclass
 from typing import Any, Dict
 
@@ -19,7 +20,7 @@ class Config:
     emg_com_port: str = "COM3"
     emg_rfcomm_channel: int = 1
     emg_vmin: float = 0.0
-    emg_vmax: float = 5.0
+    emg_vmax: float = 3.3
     emg_allow_lf: bool = False
     emg_start_token: str = "1"
     emg_stop_token: str = "2"
@@ -33,6 +34,7 @@ class Config:
     cop_x_half_range_cm: float = 27.94
     cop_y_half_range_cm: float = 20.27
     cop_interval_ms: int = 10
+    recording_max_samples_per_stream: int = 1_000_000
 
     # Camera / Pose
     cam_index: int = 0
@@ -47,6 +49,7 @@ class Config:
     mediapipe_smooth_landmarks: bool = True
     mediapipe_enable_segmentation: bool = False
     mediapipe_smooth_segmentation: bool = False
+    mediapipe_static_image_mode: bool = False
 
     # Plot (GUI)
     emg_plot_window: int = 200
@@ -58,17 +61,61 @@ def _repo_root() -> str:
     return os.path.abspath(os.path.join(here, os.pardir, os.pardir))  # repository root
 
 
+class ConfigError(ValueError):
+    """Raised when the configuration file cannot be loaded or is invalid."""
+
+
+def _coerce_bool(value: Any, *, field: str, default: bool) -> bool:
+    if value is None:
+        return default
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)) and value in (0, 1):
+        return bool(value)
+    if isinstance(value, str):
+        normalized = value.strip().lower()
+        if normalized in {"true", "yes", "y", "on", "1"}:
+            return True
+        if normalized in {"false", "no", "n", "off", "0"}:
+            return False
+    raise ConfigError(
+        f"{field} must be a boolean (true/false), got {value!r}"
+    )
+
+
 def _load_yaml(path: str) -> Dict[str, Any]:
     try:
         with open(path, "r", encoding="utf-8") as f:
             data = yaml.safe_load(f) or {}
             if not isinstance(data, dict):
-                return {}
+                raise ConfigError("top-level YAML value must be a mapping")
             return data
     except FileNotFoundError:
         return {}
-    except Exception:
-        return {}
+    except yaml.YAMLError as exc:
+        raise ConfigError(f"invalid YAML in {path}: {exc}") from exc
+    except OSError as exc:
+        raise ConfigError(f"unable to read configuration {path}: {exc}") from exc
+
+
+def _finite_float(value: Any, *, field: str, default: float) -> float:
+    try:
+        result = float(default if value is None else value)
+    except (TypeError, ValueError) as exc:
+        raise ConfigError(f"{field} must be numeric, got {value!r}") from exc
+    if not math.isfinite(result):
+        raise ConfigError(f"{field} must be finite")
+    return result
+
+
+def _positive_int(value: Any, *, field: str, default: int) -> int:
+    try:
+        result = int(default if value is None else value)
+    except (TypeError, ValueError) as exc:
+        raise ConfigError(f"{field} must be an integer, got {value!r}") from exc
+    if result <= 0:
+        raise ConfigError(f"{field} must be greater than zero")
+    return result
 
 
 def load_config() -> Config:
@@ -83,14 +130,14 @@ def load_config() -> Config:
     cfg.emg_mac           = str(data.get("emg_mac", cfg.emg_mac))
     cfg.emg_com_port      = str(data.get("emg_com_port", cfg.emg_com_port))
     cfg.emg_rfcomm_channel = int(data.get("emg_rfcomm_channel", cfg.emg_rfcomm_channel))
-    cfg.emg_vmin          = float(data.get("emg_vmin", cfg.emg_vmin))
-    cfg.emg_vmax          = float(data.get("emg_vmax", cfg.emg_vmax))
-    cfg.emg_allow_lf      = bool(data.get("emg_allow_lf", cfg.emg_allow_lf))
+    cfg.emg_vmin          = _finite_float(data.get("emg_vmin"), field="emg_vmin", default=cfg.emg_vmin)
+    cfg.emg_vmax          = _finite_float(data.get("emg_vmax"), field="emg_vmax", default=cfg.emg_vmax)
+    cfg.emg_allow_lf      = _coerce_bool(data.get("emg_allow_lf"), field="emg_allow_lf", default=cfg.emg_allow_lf)
     cfg.emg_start_token   = str(data.get("emg_start_token", cfg.emg_start_token))
     cfg.emg_stop_token    = str(data.get("emg_stop_token", cfg.emg_stop_token))
-    cfg.cop_flip_x = bool(data.get("cop_flip_x", cfg.cop_flip_x))
-    cfg.cop_flip_y = bool(data.get("cop_flip_y", cfg.cop_flip_y))
-    cfg.cop_swap_xy = bool(data.get("cop_swap_xy", cfg.cop_swap_xy))
+    cfg.cop_flip_x = _coerce_bool(data.get("cop_flip_x"), field="cop_flip_x", default=cfg.cop_flip_x)
+    cfg.cop_flip_y = _coerce_bool(data.get("cop_flip_y"), field="cop_flip_y", default=cfg.cop_flip_y)
+    cfg.cop_swap_xy = _coerce_bool(data.get("cop_swap_xy"), field="cop_swap_xy", default=cfg.cop_swap_xy)
 
     # CoP (accepts total distances or half ranges; derive missing values if needed)
     raw_gain = data.get("cop_gain", cfg.cop_gain)
@@ -100,31 +147,45 @@ def load_config() -> Config:
     elif isinstance(raw_gain, (list, tuple)):
         cfg.cop_gain = [float(g) for g in raw_gain]    # list of four gains
     else:
-        cfg.cop_gain = 1.0                             # safe fallback
+        raise ConfigError("cop_gain must be a number or a list of four numbers")
+    if isinstance(cfg.cop_gain, list) and len(cfg.cop_gain) != 4:
+        raise ConfigError("cop_gain must contain exactly four values")
 
     x_half = data.get("cop_x_half_range_cm", cfg.cop_x_half_range_cm)
     y_half = data.get("cop_y_half_range_cm", cfg.cop_y_half_range_cm)
     x_dist = data.get("cop_x_dist_cm", None)
     y_dist = data.get("cop_y_dist_cm", None)
-    cfg.cop_x_half_range_cm = float(x_half)
-    cfg.cop_y_half_range_cm = float(y_half)
-    cfg.cop_x_dist_cm = float(x_dist) if x_dist is not None else 2.0 * float(x_half)
-    cfg.cop_y_dist_cm = float(y_dist) if y_dist is not None else 2.0 * float(y_half)
-    cfg.cop_interval_ms = int(data.get("cop_interval_ms", cfg.cop_interval_ms))
+    cfg.cop_x_half_range_cm = _finite_float(x_half, field="cop_x_half_range_cm", default=cfg.cop_x_half_range_cm)
+    cfg.cop_y_half_range_cm = _finite_float(y_half, field="cop_y_half_range_cm", default=cfg.cop_y_half_range_cm)
+    cfg.cop_x_dist_cm = _finite_float(
+        x_dist, field="cop_x_dist_cm", default=2.0 * cfg.cop_x_half_range_cm
+    )
+    cfg.cop_y_dist_cm = _finite_float(
+        y_dist, field="cop_y_dist_cm", default=2.0 * cfg.cop_y_half_range_cm
+    )
+    cfg.cop_interval_ms = _positive_int(
+        data.get("cop_interval_ms"), field="cop_interval_ms", default=cfg.cop_interval_ms
+    )
+    cfg.recording_max_samples_per_stream = _positive_int(
+        data.get("recording_max_samples_per_stream"),
+        field="recording_max_samples_per_stream",
+        default=cfg.recording_max_samples_per_stream,
+    )
 
     # Camera / Pose
     cfg.cam_index  = int(data.get("cam_index",  cfg.cam_index))
-    cfg.cam_width  = int(data.get("cam_width",  cfg.cam_width))
-    cfg.cam_height = int(data.get("cam_height", cfg.cam_height))
-    cfg.cam_fps    = int(data.get("cam_fps",    cfg.cam_fps))
+    cfg.cam_width  = _positive_int(data.get("cam_width"), field="cam_width", default=cfg.cam_width)
+    cfg.cam_height = _positive_int(data.get("cam_height"), field="cam_height", default=cfg.cam_height)
+    cfg.cam_fps    = _positive_int(data.get("cam_fps"), field="cam_fps", default=cfg.cam_fps)
 
     # MediaPipe
     cfg.mediapipe_model_complexity          = int(data.get("mediapipe_model_complexity",          cfg.mediapipe_model_complexity))
     cfg.mediapipe_min_detection_confidence  = float(data.get("mediapipe_min_detection_confidence", cfg.mediapipe_min_detection_confidence))
     cfg.mediapipe_min_tracking_confidence   = float(data.get("mediapipe_min_tracking_confidence",  cfg.mediapipe_min_tracking_confidence))
-    cfg.mediapipe_smooth_landmarks          = bool(data.get("mediapipe_smooth_landmarks",          cfg.mediapipe_smooth_landmarks))
-    cfg.mediapipe_enable_segmentation       = bool(data.get("mediapipe_enable_segmentation",       cfg.mediapipe_enable_segmentation))
-    cfg.mediapipe_smooth_segmentation       = bool(data.get("mediapipe_smooth_segmentation",       cfg.mediapipe_smooth_segmentation))
+    cfg.mediapipe_smooth_landmarks          = _coerce_bool(data.get("mediapipe_smooth_landmarks"), field="mediapipe_smooth_landmarks", default=cfg.mediapipe_smooth_landmarks)
+    cfg.mediapipe_enable_segmentation       = _coerce_bool(data.get("mediapipe_enable_segmentation"), field="mediapipe_enable_segmentation", default=cfg.mediapipe_enable_segmentation)
+    cfg.mediapipe_smooth_segmentation       = _coerce_bool(data.get("mediapipe_smooth_segmentation"), field="mediapipe_smooth_segmentation", default=cfg.mediapipe_smooth_segmentation)
+    cfg.mediapipe_static_image_mode         = _coerce_bool(data.get("mediapipe_static_image_mode"), field="mediapipe_static_image_mode", default=cfg.mediapipe_static_image_mode)
 
     # Plot
     cfg.emg_plot_window   = int(data.get("emg_plot_window",   cfg.emg_plot_window))
@@ -178,6 +239,8 @@ def config_to_dict(config: Config) -> ConfigDict:
         'mediapipe_smooth_landmarks': config.mediapipe_smooth_landmarks,
         'mediapipe_enable_segmentation': config.mediapipe_enable_segmentation,
         'mediapipe_smooth_segmentation': config.mediapipe_smooth_segmentation,
+        'mediapipe_static_image_mode': config.mediapipe_static_image_mode,
+        'recording_max_samples_per_stream': config.recording_max_samples_per_stream,
     }
 
 # Function to load config as dictionary (compatibility)

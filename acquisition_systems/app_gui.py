@@ -11,6 +11,7 @@ if __package__ is None or __package__ == "":
 import os
 import sys
 import time
+from collections import deque
 from datetime import datetime
 import traceback
 import queue
@@ -43,6 +44,66 @@ def dated_subdir(base: str) -> str:
     return path
 
 
+class HardwareStartup(QtCore.QObject):
+    """Initialize hardware away from Qt's GUI thread."""
+
+    ready = QtCore.pyqtSignal(object, object, object, object)
+
+    def __init__(self, cfg):
+        super().__init__()
+        self.cfg = cfg
+
+    @QtCore.pyqtSlot()
+    def run(self):
+        workers = [None, None, None]
+        errors = []
+        try:
+            workers[0] = EMGWorker(
+                self.cfg.emg_mac,
+                self.cfg.emg_com_port,
+                self.cfg.emg_rfcomm_channel,
+                self.cfg.emg_vmin,
+                self.cfg.emg_vmax,
+                start_token=self.cfg.emg_start_token,
+                stop_token=self.cfg.emg_stop_token,
+            )
+            workers[0].ALLOW_LF = self.cfg.emg_allow_lf
+            workers[0].start()
+        except Exception as exc:
+            errors.append(f"EMG: {exc}")
+            workers[0] = None
+
+        try:
+            workers[1] = CoPWorker(
+                self.cfg.cop_gain,
+                self.cfg.cop_x_dist_cm,
+                self.cfg.cop_y_dist_cm,
+                self.cfg.cop_interval_ms,
+                flip_x=self.cfg.cop_flip_x,
+                flip_y=self.cfg.cop_flip_y,
+                swap_xy=self.cfg.cop_swap_xy,
+            )
+            workers[1].start()
+        except Exception as exc:
+            errors.append(f"CoP: {exc}")
+            workers[1] = None
+
+        try:
+            workers[2] = PoseWorker(
+                self.cfg.cam_index,
+                self.cfg.cam_width,
+                self.cfg.cam_height,
+                self.cfg.cam_fps,
+                config=config_to_dict(self.cfg),
+            )
+            workers[2].start()
+        except Exception as exc:
+            errors.append(f"Pose: {exc}")
+            workers[2] = None
+
+        self.ready.emit(workers[0], workers[1], workers[2], errors)
+
+
 class MainWindow(QtWidgets.QMainWindow):
     def __init__(self):
         super().__init__()
@@ -58,10 +119,19 @@ class MainWindow(QtWidgets.QMainWindow):
 
         self._setup_ui()
 
-        self._emg_buf = []
-        self._ang_buf = []
+        # Keep plotting bounded independently from the recording buffers.
+        # Filtering an unbounded 1 kHz history on every Qt tick would starve
+        # the GUI on a Raspberry Pi.
+        emg_capacity = max(min(int(self.emg_plot_window * 1000), 30000), 2000)
+        angle_capacity = max(min(int(self.angle_plot_window * 30), 10000), 2000)
+        self._emg_buf = deque(maxlen=emg_capacity)
+        self._emg_times = deque(maxlen=emg_capacity)
+        self._emg_plot_origin = None
+        self._ang_buf = deque(maxlen=angle_capacity)
+        self._ang_times = deque(maxlen=angle_capacity)
+        self._ang_plot_origin = None
 
-        self.rec = Recorder()
+        self.rec = Recorder(self.cfg.recording_max_samples_per_stream)
 
         self.emg_worker = None
         self.cop_worker = None
@@ -70,6 +140,10 @@ class MainWindow(QtWidgets.QMainWindow):
         self.running = False
         self.t_start = None
         self.t_stop = 0.0
+        self._pending_duration = 0.0
+        self._starting = False
+        self._startup_thread = None
+        self._startup_worker = None
 
         # Timer for polling queues. PyQtGraph handles 30 FPS easily.
         self.timer = QtCore.QTimer()
@@ -114,7 +188,7 @@ class MainWindow(QtWidgets.QMainWindow):
         # --- EMG ---
         self.p_emg = self.glw.addPlot(title="Abdominal EMG")
         self.p_emg.setLabel('left', "EMG [V]")
-        self.p_emg.setYRange(0, 5)
+        self.p_emg.setYRange(self.cfg.emg_vmin, self.cfg.emg_vmax)
         self.p_emg.showGrid(x=True, y=True, alpha=0.3)
         self.emg_curve = self.p_emg.plot(pen='y', width=1.5)
 
@@ -158,6 +232,8 @@ class MainWindow(QtWidgets.QMainWindow):
         return f"{stamp}_{elapsed}s"
 
     def toggle_start(self):
+        if self._starting:
+            return
         if not self.running:
             try:
                 dur = float(self.e_len.text() or "20")
@@ -165,55 +241,17 @@ class MainWindow(QtWidgets.QMainWindow):
                 dur = 20.0
             dur = max(1.0, dur)
 
-            print("[GUI] Starting EMG Worker...")
-            try:
-                self.emg_worker = EMGWorker(
-                    self.cfg.emg_mac,
-                    self.cfg.emg_com_port,
-                    self.cfg.emg_rfcomm_channel,
-                    self.cfg.emg_vmin,
-                    self.cfg.emg_vmax,
-                    start_token=self.cfg.emg_start_token,
-                    stop_token=self.cfg.emg_stop_token,
-                )
-                self.emg_worker.ALLOW_LF = bool(getattr(self.cfg, 'emg_allow_lf', False))
-                self.emg_worker.start()
-            except Exception as e:
-                print(f"[WARNING] Could not start EMG Worker (Bluetooth). It will be disabled. Error: {e}")
-                self.emg_worker = None
-
-            print("[GUI] Starting CoP Worker...")
-            try:
-                self.cop_worker = CoPWorker(
-                    self.cfg.cop_gain, self.cfg.cop_x_dist_cm, self.cfg.cop_y_dist_cm, self.cfg.cop_interval_ms,
-                    flip_x=self.cfg.cop_flip_x, flip_y=self.cfg.cop_flip_y, swap_xy=self.cfg.cop_swap_xy
-                )
-                self.cop_worker.start()
-            except Exception as e:
-                print(f"[WARNING] Could not start CoP Worker (Force Plate). It will be disabled. Error: {e}")
-                self.cop_worker = None
-
-            print("[GUI] Starting Pose Worker...")
-            try:
-                self.pose_worker = PoseWorker(
-                    self.cfg.cam_index,
-                    self.cfg.cam_width,
-                    self.cfg.cam_height,
-                    self.cfg.cam_fps,
-                    config=config_to_dict(self.cfg),
-                )
-                self.pose_worker.start()
-            except Exception as e:
-                print(f"[WARNING] Could not start Pose Worker (Camera). It will be disabled. Error: {e}")
-                self.pose_worker = None
-                
-            if not any([self.emg_worker, self.cop_worker, self.pose_worker]):
-                QtWidgets.QMessageBox.critical(self, "Hardware Error", "No hardware could be started! Check logs.")
-                self._stop_all()
-                return
-
+            self._pending_duration = dur
+            self._starting = True
+            self.b_start.setEnabled(False)
+            self.b_start.setText("Starting...")
+            self.rec.clear()
             self._emg_buf.clear()
+            self._emg_times.clear()
+            self._emg_plot_origin = None
             self._ang_buf.clear()
+            self._ang_times.clear()
+            self._ang_plot_origin = None
             
             # Clear plots
             self.emg_curve.setData([])
@@ -222,16 +260,49 @@ class MainWindow(QtWidgets.QMainWindow):
             for line in self.pose_lines: line.setData([], [])
             self.ang_curve.setData([])
 
-            self.t_start = time.time()
-            self.t_stop = self.t_start + dur
-            self.running = True
-            self.b_start.setText("Stop")
-            
-            # Since PyQtGraph is highly optimized, we can run GUI ticks much faster (30 FPS)
-            self.timer.start(33)
+            self._startup_thread = QtCore.QThread(self)
+            self._startup_worker = HardwareStartup(self.cfg)
+            self._startup_worker.moveToThread(self._startup_thread)
+            self._startup_thread.started.connect(self._startup_worker.run)
+            self._startup_worker.ready.connect(self._on_hardware_ready)
+            self._startup_worker.ready.connect(self._startup_thread.quit)
+            self._startup_thread.finished.connect(self._startup_worker.deleteLater)
+            self._startup_thread.finished.connect(self._on_startup_finished)
+            self._startup_thread.start()
         else:
             self._stop_all()
             self.b_start.setText("Start")
+
+    @QtCore.pyqtSlot(object, object, object, object)
+    def _on_hardware_ready(self, emg_worker, cop_worker, pose_worker, errors):
+        self.emg_worker = emg_worker
+        self.cop_worker = cop_worker
+        self.pose_worker = pose_worker
+        for error in errors:
+            print(f"[WARNING] {error}")
+
+        if not any((self.emg_worker, self.cop_worker, self.pose_worker)):
+            self._starting = False
+            self.b_start.setEnabled(True)
+            self.b_start.setText("Start")
+            QtWidgets.QMessageBox.critical(
+                self, "Hardware Error",
+                "No hardware could be started. Check the console output.",
+            )
+            return
+
+        self.t_start = time.time()
+        self.t_stop = self.t_start + self._pending_duration
+        self.running = True
+        self._starting = False
+        self.b_start.setEnabled(True)
+        self.b_start.setText("Stop")
+        self.timer.start(33)
+
+    def _on_startup_finished(self):
+        self._startup_thread.deleteLater()
+        self._startup_thread = None
+        self._startup_worker = None
 
     def save_csv(self):
         base = (self.e_name.text() or "").strip()
@@ -251,21 +322,22 @@ class MainWindow(QtWidgets.QMainWindow):
             return
 
         try:
-            # Drain EMG queue
-            emg_latest = None
+            # Drain EMG queue. Every sample is recorded; only the newest is
+            # needed for display.
+            emg_samples = []
             if self.emg_worker:
-                while not self.emg_worker.queue.empty():
+                while True:
                     try:
-                        emg = self.emg_worker.queue.get_nowait()
-                        if emg: self.rec.push_emg(emg)
-                        emg_latest = emg
+                        emg_samples.append(self.emg_worker.queue.get_nowait())
                     except queue.Empty:
                         break
+                for emg in emg_samples:
+                    self.rec.push_emg(emg)
             
             # Drain CoP queue
             cop_latest = None
             if self.cop_worker:
-                while not self.cop_worker.queue.empty():
+                while True:
                     try:
                         cop = self.cop_worker.queue.get_nowait()
                         if cop: self.rec.push_cop(cop)
@@ -276,7 +348,7 @@ class MainWindow(QtWidgets.QMainWindow):
             # Drain Pose queue
             pose_latest = None
             if self.pose_worker:
-                while not self.pose_worker.landmarks_q.empty():
+                while True:
                     try:
                         pose = self.pose_worker.landmarks_q.get_nowait()
                         if pose: self.rec.push_pose(pose)
@@ -287,7 +359,7 @@ class MainWindow(QtWidgets.QMainWindow):
             # Drain Angle queue
             ang_latest = None
             if self.pose_worker:
-                while not self.pose_worker.angle_q.empty():
+                while True:
                     try:
                         ang = self.pose_worker.angle_q.get_nowait()
                         if ang: self.rec.push_angle(ang)
@@ -296,19 +368,27 @@ class MainWindow(QtWidgets.QMainWindow):
                         break
 
             # --- High-Performance PyQtGraph Updates ---
-            if emg_latest:
-                self._emg_buf.append(emg_latest.value)
-                self._emg_buf = self._emg_buf[-max(self.emg_plot_window * 25, 2000):]
-                
-                plot_data = np.array(self._emg_buf)
-                # Apply 60Hz Notch (FFT) automatically as per the paper methodology
+            if emg_samples:
+                for sample in emg_samples:
+                    self._emg_buf.append(sample.value)
+                    if self._emg_plot_origin is None:
+                        self._emg_plot_origin = sample.t
+                    self._emg_times.append(sample.t - self._emg_plot_origin)
+                # Apply the zero-phase notch only to a recent display window;
+                # the complete filtered stream is persisted by Recorder.
+                display_count = min(len(self._emg_buf), 5000)
+                plot_data = np.array(list(self._emg_buf)[-display_count:])
+                plot_times = np.array(list(self._emg_times)[-display_count:])
                 if len(plot_data) > 100:
-                    plot_data = apply_fft_notch(plot_data, fs=1000.0, target_freq=60.0)
-                    
-                self.emg_curve.setData(plot_data)
-                right = len(self._emg_buf)
-                left  = right - self.emg_plot_window
-                self.p_emg.setXRange(left, left + self.emg_plot_window, padding=0)
+                    deltas = np.diff(plot_times)
+                    valid = deltas[deltas > 0]
+                    fs = 1.0 / float(np.median(valid)) if valid.size else 1000.0
+                    plot_data = apply_fft_notch(plot_data, fs=fs, target_freq=60.0)
+
+                self.emg_curve.setData(plot_times, plot_data)
+                right = float(plot_times[-1])
+                display_window = min(float(self.emg_plot_window), 5.0)
+                self.p_emg.setXRange(max(0.0, right - display_window), right, padding=0)
 
             if cop_latest:
                 try:
@@ -336,11 +416,12 @@ class MainWindow(QtWidgets.QMainWindow):
 
             if ang_latest:
                 self._ang_buf.append(ang_latest.deg)
-                self._ang_buf = self._ang_buf[-max(self.angle_plot_window * 40, 2000):]
-                self.ang_curve.setData(self._ang_buf)
-                right = len(self._ang_buf)
-                left  = right - self.angle_plot_window
-                self.p_ang.setXRange(left, left + self.angle_plot_window, padding=0)
+                if self._ang_plot_origin is None:
+                    self._ang_plot_origin = ang_latest.t
+                self._ang_times.append(ang_latest.t - self._ang_plot_origin)
+                self.ang_curve.setData(self._ang_times, self._ang_buf)
+                right = float(self._ang_times[-1])
+                self.p_ang.setXRange(max(0.0, right - self.angle_plot_window), right, padding=0)
             
         except Exception:
             print("[GUI] Tick error:")
@@ -356,9 +437,14 @@ class MainWindow(QtWidgets.QMainWindow):
                 pass
         self.emg_worker = self.cop_worker = self.pose_worker = None
         self.running = False
+        self._starting = False
+        self.b_start.setEnabled(True)
         print("[GUI] All workers stopped.")
 
     def closeEvent(self, event):
+        if self._startup_thread is not None:
+            self._startup_thread.quit()
+            self._startup_thread.wait(1000)
         self._stop_all()
         event.accept()
 

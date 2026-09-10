@@ -1,0 +1,11 @@
+.git
+.gitignore
+venv
+uv_bin
+uv.zip
+sessions
+__pycache__
+*.py[cod]
+*.csv
+*.log
+data

@@ -7,7 +7,7 @@ Uses Python's native socket module (AF_BLUETOOTH), eliminating the need for PyBl
 Config expectations:
   mac_address: "A4:CF:12:96:8B:9E"
   rfcomm_channel: 1
-  clamp_min/max: 0.0..5.0
+  clamp_min/max: 0.0..3.3
 """
 
 import os
@@ -19,8 +19,6 @@ import socket
 from typing import Optional
 
 from acquisition_systems.common.types import EmgSample
-from acquisition_systems.common.utils import put_latest
-
 def _dbg(msg: str):
     if os.environ.get("EMG_DEBUG") == "1":
         print(f"[EMG] {msg}")
@@ -39,9 +37,11 @@ class EMGWorker:
         com_port: str = "COM3",
         rfcomm_channel: int = 1,
         clamp_min: float = 0.0,
-        clamp_max: float = 5.0,
+        clamp_max: float = 3.3,
         start_token: str = "1",
         stop_token: str = "2",
+        sample_rate_hz: float = 1000.0,
+        queue_size: int = 10000,
     ):
         self.mac = mac_address
         self.com_port = com_port
@@ -50,13 +50,19 @@ class EMGWorker:
         self.vmax = float(clamp_max)
         self.start_token = start_token
         self.stop_token = stop_token
+        if sample_rate_hz <= 0:
+            raise ValueError("sample_rate_hz must be greater than zero")
+        self.sample_interval = 1.0 / float(sample_rate_hz)
 
         self.sock: Optional[socket.socket] = None
         self.serial_conn = None
-        self.queue: queue.Queue = queue.Queue(maxsize=10000)
+        self._bridge_proc = None
+        self.queue: queue.Queue = queue.Queue(maxsize=max(1, int(queue_size)))
+        self.dropped_samples = 0
         self._stop = threading.Event()
         self._thread: Optional[threading.Thread] = None
         self._tail = b""  # partial line buffer across recv() calls
+        self._sample_clock: Optional[float] = None
 
     # ---------- connection ----------
     def _connect(self):
@@ -64,7 +70,7 @@ class EMGWorker:
             import serial
             _dbg(f"Connecting Serial to {self.com_port} (Windows) ...")
             try:
-                self.serial_conn = serial.Serial(self.com_port, 115200, timeout=1.0)
+                self.serial_conn = serial.Serial(self.com_port, 115200, timeout=0.2, write_timeout=0.2)
                 _dbg("Connected. Sending start token...")
                 if self.start_token:
                     self.serial_conn.write(self.start_token.encode('utf-8'))
@@ -76,40 +82,52 @@ class EMGWorker:
             # Native Bluetooth socket (Linux only)
             try:
                 self.sock = socket.socket(socket.AF_BLUETOOTH, socket.SOCK_STREAM, socket.BTPROTO_RFCOMM)
+                self.sock.settimeout(5.0)
                 self.sock.connect((self.mac, self.chan))
+                self.sock.settimeout(0.2)
                 _dbg("Connected. Sending start token...")
                 if self.start_token:
-                    self.sock.send(self.start_token.encode('utf-8'))
+                    self.sock.sendall(self.start_token.encode('utf-8'))
             except AttributeError:
-                _dbg("AF_BLUETOOTH missing in Conda Python. Using system Python bridge...")
+                _dbg("AF_BLUETOOTH missing in this Python. Using a parameterized system Python bridge...")
                 import subprocess
-                bridge_script = f"""
-import sys, socket, threading
-try:
-    s = socket.socket(socket.AF_BLUETOOTH, socket.SOCK_STREAM, socket.BTPROTO_RFCOMM)
-    s.connect(('{self.mac}', {self.chan}))
-    if '{self.start_token}':
-        s.send('{self.start_token}'.encode('utf-8'))
-    
-    def read_stdin():
-        while True:
-            cmd = sys.stdin.buffer.read(1)
-            if not cmd: break
-            s.send(cmd)
-            
-    threading.Thread(target=read_stdin, daemon=True).start()
-    
+                # Keep the program text constant. User/configuration values are
+                # passed as argv, never interpolated into Python source.
+                bridge_script = r"""
+import socket
+import sys
+import threading
+
+mac, channel, start_token = sys.argv[1], int(sys.argv[2]), sys.argv[3]
+sock = socket.socket(socket.AF_BLUETOOTH, socket.SOCK_STREAM, socket.BTPROTO_RFCOMM)
+sock.settimeout(0.2)
+sock.connect((mac, channel))
+if start_token:
+    sock.sendall(start_token.encode("utf-8"))
+
+def forward_commands():
     while True:
-        data = s.recv(4096)
-        if not data: break
-        sys.stdout.buffer.write(data)
-        sys.stdout.buffer.flush()
-except Exception as e:
-    sys.stderr.write(str(e))
-    sys.exit(1)
+        command = sys.stdin.buffer.read(4096)
+        if not command:
+            return
+        try:
+            sock.sendall(command)
+        except (OSError, socket.timeout):
+            return
+
+threading.Thread(target=forward_commands, daemon=True).start()
+while True:
+    try:
+        data = sock.recv(4096)
+    except socket.timeout:
+        continue
+    if not data:
+        break
+    sys.stdout.buffer.write(data)
+    sys.stdout.buffer.flush()
 """
                 self._bridge_proc = subprocess.Popen(
-                    ["/usr/bin/python3", "-c", bridge_script],
+                    ["/usr/bin/python3", "-c", bridge_script, self.mac, str(self.chan), self.start_token],
                     stdin=subprocess.PIPE,
                     stdout=subprocess.PIPE,
                     stderr=subprocess.PIPE
@@ -128,6 +146,8 @@ except Exception as e:
         elif self.sock:
             try:
                 return self.sock.recv(size)
+            except socket.timeout:
+                return b""
             except Exception as e:
                 _dbg(f"Socket recv Error: {e}")
                 raise
@@ -188,6 +208,7 @@ except Exception as e:
             self._connect()
         except Exception as e:
             _dbg(f"Background connect failed: {e}")
+            self._safe_close()
             return
 
         try:
@@ -200,12 +221,31 @@ except Exception as e:
                     time.sleep(0.001)  # gentle idle
                     continue
 
-                t = time.perf_counter()
+                batch_end = time.perf_counter()
+                if self._sample_clock is None:
+                    self._sample_clock = batch_end - (len(vals) - 1) * self.sample_interval
+                elif batch_end - self._sample_clock > max(1.0, len(vals) * self.sample_interval * 10):
+                    # Resynchronise after a transport interruption without
+                    # assigning one identical timestamp to an entire batch.
+                    self._sample_clock = batch_end - (len(vals) - 1) * self.sample_interval
+
                 for v in vals:
+                    t = self._sample_clock
+                    self._sample_clock += self.sample_interval
                     try:
                         self.queue.put_nowait(EmgSample(t=t, value=v))
                     except queue.Full:
-                        pass # if we fall behind, drop oldest or ignore. Ignoring is safer here.
+                        # Preserve the newest measurement and make data loss
+                        # observable instead of silently discarding it.
+                        try:
+                            self.queue.get_nowait()
+                        except queue.Empty:
+                            pass
+                        try:
+                            self.queue.put_nowait(EmgSample(t=t, value=v))
+                        except queue.Full:
+                            pass
+                        self.dropped_samples += 1
         finally:
             self._safe_close()
 
@@ -217,11 +257,11 @@ except Exception as e:
                     if self.serial_conn:
                         self.serial_conn.write(self.stop_token.encode('utf-8'))
                     elif self.sock:
-                        self.sock.send(self.stop_token.encode('utf-8'))
-                    elif hasattr(self, '_bridge_proc') and self._bridge_proc:
+                        self.sock.sendall(self.stop_token.encode('utf-8'))
+                    elif self._bridge_proc and self._bridge_proc.stdin:
                         self._bridge_proc.stdin.write(self.stop_token.encode('utf-8'))
                         self._bridge_proc.stdin.flush()
-                    time.sleep(0.2)
+                    time.sleep(0.05)
                 except Exception as e:
                     _dbg(f"Stop token send failed (ignored): {e}")
         finally:
@@ -232,7 +272,7 @@ except Exception as e:
                 if self.sock:
                     _dbg("Closing socket.")
                     self.sock.close()
-                if hasattr(self, '_bridge_proc') and self._bridge_proc:
+                if self._bridge_proc:
                     _dbg("Terminating system bridge.")
                     self._bridge_proc.terminate()
             except Exception as e:
@@ -240,18 +280,50 @@ except Exception as e:
             self.sock = None
             self.serial_conn = None
             self._bridge_proc = None
+            self._sample_clock = None
 
     # ---------- public API ----------
     def start(self):
         """Start background reader which connects asynchronously."""
+        if self._thread and self._thread.is_alive():
+            return
+        while True:
+            try:
+                self.queue.get_nowait()
+            except queue.Empty:
+                break
         self._stop.clear()
+        self.dropped_samples = 0
         self._thread = threading.Thread(target=self._loop, daemon=True)
         self._thread.start()
         _dbg("Reader thread started.")
 
     def stop(self):
         self._stop.set()
+        # Closing the transport is the wake-up mechanism for a blocking
+        # recv/read. Do it before join so stop() has a bounded latency.
+        try:
+            if self.sock:
+                self.sock.shutdown(socket.SHUT_RDWR)
+        except (OSError, AttributeError):
+            pass
+        try:
+            if self.sock:
+                self.sock.close()
+        except OSError:
+            pass
+        try:
+            if self.serial_conn:
+                self.serial_conn.cancel_read()
+                self.serial_conn.close()
+        except (AttributeError, OSError):
+            pass
+        if self._bridge_proc:
+            try:
+                self._bridge_proc.terminate()
+            except Exception:
+                pass
         if self._thread:
-            self._thread.join(timeout=1.0)
+            self._thread.join(timeout=2.0)
             self._thread = None
         _dbg("Stopped.")

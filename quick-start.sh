@@ -4,7 +4,7 @@
 # Automated setup and deployment with Docker
 # =============================================================================
 
-set -e  # Exit on error
+set -euo pipefail
 
 # Colors for output
 RED='\033[0;31m'
@@ -39,30 +39,30 @@ if command_exists docker; then
     docker --version
 else
     echo -e "${RED}✗ Docker is not installed${NC}"
-    echo -e "${YELLOW}Installing Docker...${NC}"
-    curl -fsSL https://get.docker.com -o get-docker.sh
-    sudo sh get-docker.sh
-    sudo usermod -aG docker $USER
-    rm get-docker.sh
-    echo -e "${GREEN}✓ Docker installed. Please log out and log back in.${NC}"
-    exit 0
+    echo -e "${YELLOW}Install Docker using your OS package manager or the official Docker documentation, then rerun this script.${NC}"
+    exit 1
 fi
 
 # Check Docker Compose
 echo -e "\n${BLUE}[2/5] Checking Docker Compose...${NC}"
 if command_exists docker-compose || docker compose version >/dev/null 2>&1; then
     echo -e "${GREEN}✓ Docker Compose is available${NC}"
+    if command_exists docker-compose; then
+        COMPOSE_CMD=(docker-compose)
+    else
+        COMPOSE_CMD=(docker compose)
+    fi
 else
     echo -e "${RED}✗ Docker Compose is not installed${NC}"
-    echo -e "${YELLOW}Installing Docker Compose...${NC}"
-    sudo apt-get update
-    sudo apt-get install -y docker-compose
-    echo -e "${GREEN}✓ Docker Compose installed${NC}"
+    echo -e "${YELLOW}Install the Docker Compose plugin using your OS package manager, then rerun this script.${NC}"
+    exit 1
 fi
 
 # Setup X11 for GUI
 echo -e "\n${BLUE}[3/5] Setting up X11 access...${NC}"
-xhost +local:docker 2>/dev/null || echo -e "${YELLOW}⚠ Could not configure X11 (GUI may not work)${NC}"
+xhost +SI:localuser:root 2>/dev/null || echo -e "${YELLOW}⚠ Could not configure X11 (GUI may not work)${NC}"
+cleanup_xhost() { xhost -SI:localuser:root >/dev/null 2>&1 || true; }
+trap cleanup_xhost EXIT
 
 # Create data directory
 echo -e "\n${BLUE}[4/5] Creating data directory...${NC}"
@@ -74,7 +74,7 @@ echo -e "\n${BLUE}[5/5] Building and starting container...${NC}"
 echo -e "${YELLOW}This may take 10-15 minutes on first run...${NC}"
 
 if [ -f docker-compose.yml ]; then
-    docker-compose up -d --build
+    "${COMPOSE_CMD[@]}" up -d --build
     echo -e "\n${GREEN}✓ Container started successfully!${NC}"
 else
     echo -e "${RED}✗ docker-compose.yml not found${NC}"
@@ -85,20 +85,20 @@ fi
 echo -e "\n${BLUE}=====================================================================${NC}"
 echo -e "${GREEN}✓ Setup complete!${NC}"
 echo -e "\n${BLUE}Useful commands:${NC}"
-echo -e "  ${YELLOW}View logs:${NC}        docker-compose logs -f"
-echo -e "  ${YELLOW}Stop system:${NC}      docker-compose down"
-echo -e "  ${YELLOW}Restart:${NC}          docker-compose restart"
-echo -e "  ${YELLOW}Access shell:${NC}     docker-compose exec cop-emg-system bash"
-echo -e "  ${YELLOW}Update image:${NC}     docker-compose up -d --build"
+echo -e "  ${YELLOW}View logs:${NC}        ${COMPOSE_CMD[*]} logs -f"
+echo -e "  ${YELLOW}Stop system:${NC}      ${COMPOSE_CMD[*]} down"
+echo -e "  ${YELLOW}Restart:${NC}          ${COMPOSE_CMD[*]} restart"
+echo -e "  ${YELLOW}Access shell:${NC}     ${COMPOSE_CMD[*]} exec cop-emg-system bash"
+echo -e "  ${YELLOW}Update image:${NC}     ${COMPOSE_CMD[*]} up -d --build"
 echo -e "\n${BLUE}GUI Access:${NC}"
 echo -e "  The GUI should appear automatically."
 echo -e "  If not, check logs with: docker-compose logs -f"
 echo -e "\n${BLUE}Data Location:${NC}"
-echo -e "  Recorded data will be saved in: ${PWD}/data/"
+echo -e "  Recorded data will be saved in: ${PWD}/sessions/"
 echo -e "\n${BLUE}=====================================================================${NC}"
 
 # Show container status
 echo -e "\n${BLUE}Container Status:${NC}"
-docker-compose ps
+"${COMPOSE_CMD[@]}" ps
 
 echo -e "\n${GREEN}🚀 System is ready! Check logs above for any errors.${NC}"

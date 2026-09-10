@@ -6,13 +6,13 @@
 //
 // Protocol:
 //   - Waits for start token '1' via Bluetooth to begin transmission
-//   - Sends voltage values (0.0 - 5.0 V) as text lines terminated by \r\n
+//   - Sends voltage values (0.0 - 3.3 V) as text lines terminated by \r\n
 //   - Stops transmission when stop token '2' is received
 //
 // Signal characteristics:
 //   - Baseline:   ~0.5 V with small white noise
 //   - Bursts:     Every 3 seconds, a 600 ms contraction burst (peak ~2.5 V)
-//   - Sample rate: ~500 Hz (2 ms delay between samples)
+//   - Sample rate: 1000 Hz
 //
 // LED feedback:
 //   - Blinking (500 ms):  Waiting for connection / start token
@@ -41,6 +41,8 @@ const long blinkInterval     = 500; // LED blink interval in milliseconds
 unsigned long burstStartTime = 0;
 bool inBurst = false;
 float phase = 0.0;
+unsigned long previousMicros = 0;
+const unsigned long sampleIntervalMicros = 1000;
 
 void setup() {
   Serial.begin(115200);
@@ -67,6 +69,7 @@ void loop() {
 
     if (intValue == 1) {
       isConnected = true;
+      previousMicros = micros();
       digitalWrite(LED_PIN, HIGH); // Turn LED solid ON when connected
     } else {
       // Blink LED while waiting for connection
@@ -76,6 +79,13 @@ void loop() {
       }
     }
   } else {
+    unsigned long currentMicros = micros();
+    if (currentMicros - previousMicros < sampleIntervalMicros) {
+      delay(0);
+      continue;
+    }
+    previousMicros += sampleIntervalMicros;
+
     // --- MATHEMATICAL EMG SIMULATOR ---
     float volt = 0.5; // Baseline at 0.5V
 
@@ -98,10 +108,9 @@ void loop() {
     volt += random(-5, 5) / 100.0;
 
     if (volt < 0.0) volt = 0.0;
-    if (volt > 5.0) volt = 5.0;
+    if (volt > 3.3) volt = 3.3;
     // ----------------------------------
 
-    Serial.println(volt);
     SerialBT.println(volt);
 
     // Check if stop token '2' is received
@@ -113,6 +122,6 @@ void loop() {
       }
     }
 
-    delay(2); // ~500 Hz sampling rate
+    delay(0); // yield without changing the 1000 Hz sampling clock
   }
 }
