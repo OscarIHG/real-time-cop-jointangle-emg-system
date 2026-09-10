@@ -1,0 +1,47 @@
+name: CI
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+    branches: [master]
+
+jobs:
+  test:
+    name: Tests and syntax checks
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      # Only the pure-Python dependencies exercised by the unit tests.
+      # Hardware libraries (Phidget22, MediaPipe, OpenCV, PyQt) are not
+      # needed here and would slow the runner down considerably.
+      - name: Install test dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install "numpy==2.4.*" "scipy==1.17.*" "pandas==3.0.*" "PyYAML==6.0.*"
+
+      - name: Compile all Python sources
+        run: python -m compileall -q acquisition_systems scripts tests
+
+      - name: Run unit tests
+        run: python -m unittest discover -s tests -v
+
+      - name: Validate config.yaml
+        run: python -c "import yaml; yaml.safe_load(open('config.yaml', encoding='utf-8')); print('config.yaml OK')"
+
+      - name: Check shell script syntax
+        run: bash -n setup.sh
+
+      - name: Check PowerShell script syntax
+        shell: pwsh
+        run: |
+          $tokens = $null; $errors = $null
+          [System.Management.Automation.Language.Parser]::ParseFile("$PWD/setup.ps1", [ref]$tokens, [ref]$errors) | Out-Null
+          if ($errors.Count -gt 0) { $errors | ForEach-Object { Write-Error $_.Message }; exit 1 }
+          Write-Output "setup.ps1 syntax OK"

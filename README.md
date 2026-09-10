@@ -1,5 +1,6 @@
 # Real-Time CoP-JointAngle-EMG System
 
+[![CI](https://github.com/OscarIHG/real-time-cop-jointangle-emg-system/actions/workflows/ci.yml/badge.svg)](https://github.com/OscarIHG/real-time-cop-jointangle-emg-system/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![DOI](https://img.shields.io/badge/DOI-10.1007%2F978--3--032--13729--6__38-blue)](https://doi.org/10.1007/978-3-032-13729-6_38)
 
@@ -140,6 +141,7 @@ The script automatically finds the latest saved CSV in `sessions/`, writes a `_p
 ```bash
 ./venv/bin/python -m unittest discover -s tests -v
 ```
+The same tests, plus syntax checks of the installer scripts, run automatically on GitHub Actions for every push and pull request (see `.github/workflows/ci.yml`).
 
 ---
 
@@ -164,6 +166,7 @@ Boolean values must be written as `true` or `false`; the loader reports an error
 
 ```text
 real-time-cop-jointangle-emg-system/
+├── .github/workflows/ci.yml  # Automated tests on every push
 ├── CITATION.cff              # Academic citation metadata
 ├── LICENSE                   # MIT License
 ├── README.md                 # Setup, usage and troubleshooting guide
