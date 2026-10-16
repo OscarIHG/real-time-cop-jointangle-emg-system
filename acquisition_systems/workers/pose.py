@@ -1,21 +1,28 @@
 # -*- coding: utf-8 -*-
 """
-PoseWorker: captures landmarks using MediaPipe from a camera and publishes:
-  - PoseSample: 33 landmarks (33 x 2) in pixel coordinates
-  - AngleSample: pelvic obliquity angle (deg) computed from landmarks 23–24
+PoseWorker: MediaPipe Pose on live camera frames. Publishes PoseSample with
+33 landmarks (pixels), their visibility and the pelvic obliquity angle
+(landmarks 23 -> 24).
 
-REPLACES the TensorFlow Lite version with superior MediaPipe.
-MediaPipe provides 33 landmarks vs 17 from MoveNet, higher precision and temporal tracking.
-OPTIMIZED for better performance and FIXED vertical inversion.
+Pipeline (Raspberry Pi oriented):
+  camera  -> LatestFrameGrabber thread (keeps only the newest frame + capture time)
+  newest  -> inference thread (MediaPipe, model_complexity=0 by default)
+  samples -> bounded queue drained by the session coordinator / GUI
+
+The frame is fed to MediaPipe upright. Older releases flipped it vertically,
+which showed MediaPipe an upside-down, mirrored person, degraded detection and
+inverted the angle sign. A physically rotated camera is handled with
+``cam_rotation``, and only the *plot* axis is inverted for display.
 """
-import time
 import queue
+import threading
+import time
 import warnings
+from collections import deque
 
 # Suppress harmless MediaPipe/Protobuf deprecation warnings
 warnings.filterwarnings("ignore", category=UserWarning, module="google.protobuf.symbol_database")
 
-import threading
 import numpy as np
 
 try:
@@ -28,271 +35,141 @@ except Exception as e:
 else:
     _pose_import_error = None
 
-from acquisition_systems.common.types import PoseSample, AngleSample
-from acquisition_systems.common.utils import put_latest, pelvic_obliquity_deg_from_landmarks
+from acquisition_systems.common.types import PoseSample
+from acquisition_systems.common.utils import RateMeter, pelvic_obliquity_deg_from_landmarks, put_counting
 from acquisition_systems.common.config import ConfigDict
+from acquisition_systems.workers.camera import LatestFrameGrabber, open_frame_source, to_rgb
 
-
-def _calculate_pelvic_obliquity_mediapipe(landmarks: np.ndarray) -> float:
-    """
-    Calculates pelvic obliquity using MediaPipe landmarks 23 and 24.
-    MediaPipe landmarks 23 = left hip, 24 = right hip
-    
-    Args:
-        landmarks: Array (33, 2) with [x, y] coordinates of MediaPipe landmarks
-    Returns:
-        Angle in degrees (positive = tilt towards right)
-    """
-    return pelvic_obliquity_deg_from_landmarks(landmarks)
+LM_COUNT = 33
 
 
 class PoseWorker:
-    """
-    Pose worker using MediaPipe - Superior to TensorFlow Lite.
-    OPTIMIZED for performance and FIXED for correct orientation.
-    
-    Features:
-    - 33 landmarks (vs 17 from MoveNet)
-    - Smooth temporal tracking
-    - Better precision for joint angles
-    - Automatic configuration without external models
-    - FIXED: Corrected vertical inversion issue
-    - OPTIMIZED: Better performance with reduced resolution and model complexity
-    """
-    
-    def __init__(self, cam_index: int = 0, width: int = 640, height: int = 480, 
-                 fps: int = 30, config: ConfigDict = None):
-        """Initialize PoseWorker with original interface for compatibility."""
+    def __init__(self, cam_index: int = 0, width: int = 640, height: int = 480,
+                 fps: int = 30, config: ConfigDict = None, queue_size: int = 2000):
         if cv2 is None or mp is None:
             raise ImportError(f"OpenCV and MediaPipe are required: {_pose_import_error}")
-        
+        config = config or {}
         self.idx = cam_index
         self.cam_w = int(width)
         self.cam_h = int(height)
         self.fps = max(1, int(fps))
-        
-        # MediaPipe configuration - OPTIMIZED for performance
-        if config:
-            self.model_complexity = int(config.get('mediapipe_model_complexity', 0))  # 0 = fastest
-            self.min_detection_confidence = float(config.get('mediapipe_min_detection_confidence', 0.7))
-            self.min_tracking_confidence = float(config.get('mediapipe_min_tracking_confidence', 0.5))
-            self.smooth_landmarks = bool(config.get('mediapipe_smooth_landmarks', True))
-            self.smooth_segmentation = bool(config.get('mediapipe_smooth_segmentation', False))
-            self.static_image_mode = bool(config.get('mediapipe_static_image_mode', False))
-        else:
-            # OPTIMIZED default values for best performance
-            self.model_complexity = 0        # Fastest model
-            self.min_detection_confidence = 0.7
-            self.min_tracking_confidence = 0.5
-            self.smooth_landmarks = True
-            self.smooth_segmentation = False
-            self.static_image_mode = False
-        
-        self.landmarks_q: queue.Queue = queue.Queue(maxsize=1)
-        self.angle_q: queue.Queue = queue.Queue(maxsize=1)
-        
+        self.backend = str(config.get("cam_backend", "auto"))
+        self.rotation = int(config.get("cam_rotation", 0))
+        self.hflip = bool(config.get("cam_hflip", False))
+        self.cam_file = str(config.get("cam_file", "") or "")
+        self.constant_fps = bool(config.get("cam_constant_fps", False))
+        self.min_visibility = float(config.get("pose_min_visibility", 0.5))
+        self.model_complexity = int(config.get("mediapipe_model_complexity", 0))  # 0 = fastest
+        self.min_detection_confidence = float(config.get("mediapipe_min_detection_confidence", 0.7))
+        self.min_tracking_confidence = float(config.get("mediapipe_min_tracking_confidence", 0.5))
+        self.smooth_landmarks = bool(config.get("mediapipe_smooth_landmarks", True))
+        self.static_image_mode = bool(config.get("mediapipe_static_image_mode", False))
+
+        self.queue: queue.Queue = queue.Queue(maxsize=max(1, int(queue_size)))
+        self.dropped_samples = 0
+        self.capture_rate = RateMeter()
+        self.inference_rate = RateMeter()
+        self.latency_ms: deque = deque(maxlen=200)   # capture -> landmarks published
+        self.detections = 0
+        self.processed = 0
+        self.error = None
+        self.source_name = None
+
         self._stop = threading.Event()
-        self._thread: threading.Thread | None = None
-        self._cam = None
+        self._thread = None
+        self._grabber = None
         self._pose_processor = None
-        
-        # Performance tracking
-        self._frame_count = 0
-        self._last_fps_time = time.time()
-    
-    def _open_camera(self):
-        """Open camera with optimized configuration."""
-        # Try V4L2 first (better on Linux)
-        self._cam = cv2.VideoCapture(self.idx, cv2.CAP_V4L2)
-        if not self._cam or not self._cam.isOpened():
-            try:
-                if self._cam: 
-                    self._cam.release()
-            except Exception: 
-                pass
-            # Fallback to default backend
-            self._cam = cv2.VideoCapture(self.idx)
-        
-        if not self._cam or not self._cam.isOpened():
-            raise RuntimeError(f"Camera index {self.idx} not available.")
-        
-        try:
-            # OPTIMIZED camera configuration for better performance
-            self._cam.set(cv2.CAP_PROP_FRAME_WIDTH, self.cam_w)
-            self._cam.set(cv2.CAP_PROP_FRAME_HEIGHT, self.cam_h)
-            self._cam.set(cv2.CAP_PROP_FPS, self.fps)
-            self._cam.set(cv2.CAP_PROP_BUFFERSIZE, 1)  # CRITICAL: Minimum buffer for real-time
-            
-            # Additional optimizations
-            self._cam.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc('M', 'J', 'P', 'G'))
-            # Disable auto-exposure and auto-white-balance for consistent performance
-            self._cam.set(cv2.CAP_PROP_AUTO_EXPOSURE, 0.25)  # Manual exposure
-        except Exception as ex:
-            print(f"[PoseWorker] Warning: Could not configure some camera properties: {ex}")
-    
+
+    # ---------- setup ----------
     def _init_mediapipe(self):
-        """Initialize MediaPipe Pose with optimized configuration."""
-        mp_pose = mp.solutions.pose
-        
-        self._pose_processor = mp_pose.Pose(
+        self._pose_processor = mp.solutions.pose.Pose(
             static_image_mode=self.static_image_mode,
             model_complexity=self.model_complexity,  # 0 = fastest, 2 = most accurate
             smooth_landmarks=self.smooth_landmarks,
-            smooth_segmentation=self.smooth_segmentation,
-            enable_segmentation=False,  # CRITICAL: Disable for much better performance
+            enable_segmentation=False,
             min_detection_confidence=self.min_detection_confidence,
-            min_tracking_confidence=self.min_tracking_confidence
+            min_tracking_confidence=self.min_tracking_confidence,
         )
-        
-        print(f"[PoseWorker] MediaPipe initialized (OPTIMIZED):")
-        print(f"  - Resolution: {self.cam_w}x{self.cam_h} (optimized)")
-        print(f"  - Target FPS: {self.fps} (optimized)")
-        print(f"  - Model complexity: {self.model_complexity} (0=fastest)")
-        print(f"  - Detection confidence: {self.min_detection_confidence}")
-        print(f"  - Tracking confidence: {self.min_tracking_confidence}")
-        print(f"  - Segmentation: disabled (performance boost)")
-    
-    def _process_frame(self, frame: np.ndarray) -> tuple[np.ndarray, bool]:
-        """
-        Processes frame with MediaPipe and converts to pixel coordinates.
-        FIXED: Corrects vertical inversion issue.
-        
-        Returns:
-            tuple: (landmarks_array, pose_detected)
-            - landmarks_array: (33, 2) array with [x, y] coordinates in pixels
-            - pose_detected: bool indicating if pose was detected
-        """
-        # CRITICAL FIX: Flip frame vertically to correct inversion
-        # This fixes the "head at bottom, feet at top" issue
-        frame = cv2.flip(frame, 0)  # 0 = flip around x-axis (vertical flip)
-        
-        # Convert BGR to RGB for MediaPipe
-        rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-        
-        # Process with MediaPipe
-        results = self._pose_processor.process(rgb_frame)
-        
-        # Initialize landmarks array
-        landmarks_px = np.full((33, 2), np.nan, dtype=np.float32)
-        pose_detected = False
-        
-        if results.pose_landmarks:
-            pose_detected = True
-            
-            # Convert normalized landmarks to pixel coordinates
-            # Note: After the flip, coordinates are already correctly oriented
-            for i, landmark in enumerate(results.pose_landmarks.landmark):
-                # MediaPipe returns normalized coordinates [0, 1]
-                x_px = landmark.x * self.cam_w
-                y_px = landmark.y * self.cam_h
-                
-                # Check if landmark is visible (confidence > threshold)
-                if hasattr(landmark, 'visibility') and landmark.visibility > 0.1:
-                    landmarks_px[i, 0] = x_px
-                    landmarks_px[i, 1] = y_px
-                else:
-                    # Include position even with low visibility for continuity
-                    landmarks_px[i, 0] = x_px  
-                    landmarks_px[i, 1] = y_px
-        
-        return landmarks_px, pose_detected
-    
+
+    def _process(self, rgb: np.ndarray, t: float) -> PoseSample:
+        results = self._pose_processor.process(rgb)
+        h, w = rgb.shape[:2]
+        landmarks_px = np.full((LM_COUNT, 2), np.nan, dtype=np.float32)
+        visibility = np.zeros(LM_COUNT, dtype=np.float32)
+        detected = results.pose_landmarks is not None
+        if detected:
+            for i, lm in enumerate(results.pose_landmarks.landmark[:LM_COUNT]):
+                landmarks_px[i] = (lm.x * w, lm.y * h)  # actual frame size, not the requested one
+                visibility[i] = getattr(lm, "visibility", 0.0)
+        angle = pelvic_obliquity_deg_from_landmarks(landmarks_px, visibility, self.min_visibility) if detected else float("nan")
+        return PoseSample(t=t, landmarks=landmarks_px, angle_deg=angle, detected=detected,
+                          visibility=visibility, frame_size=(w, h))
+
+    # ---------- inference loop (single owner of the MediaPipe graph) ----------
     def _loop(self):
-        """Main acquisition and processing loop - OPTIMIZED for performance."""
-        frame_count = 0
-        start_time = time.perf_counter()
+        seq = 0
         try:
             while not self._stop.is_set():
-                ok, frame = self._cam.read()
-                if not ok:
-                    time.sleep(0.01)
+                item = self._grabber.wait_newer(seq, timeout=0.5)
+                if item is None:
+                    if self._grabber.error:
+                        self.error = self._grabber.error
+                        break
                     continue
-
+                seq, t_capture, payload = item
+                self.capture_rate.tick(1, t_capture)
                 try:
-                    # Process with MediaPipe (includes flip correction)
-                    landmarks_px, pose_detected = self._process_frame(frame)
-                    t = time.perf_counter()
-                    
-                    if pose_detected:
-                        # Publish pose sample (33 landmarks)
-                        put_latest(
-                            self.landmarks_q,
-                            PoseSample(t=t, landmarks=landmarks_px),
-                        )
-                        
-                        # Calculate and publish pelvic obliquity angle
-                        angle_deg = _calculate_pelvic_obliquity_mediapipe(landmarks_px)
-                        put_latest(self.angle_q, AngleSample(t=t, deg=angle_deg))
-                    
-                    frame_count += 1
-                    
-                    # Performance statistics every 100 frames
-                    if frame_count % 100 == 0:
-                        elapsed = t - start_time
-                        fps_actual = frame_count / elapsed if elapsed > 0 else 0
-                        print(f"[PoseWorker] Performance: {fps_actual:.1f} FPS, {frame_count} poses detected")
-                    
-                    # Performance throttling - don't exceed target FPS
-                    target_frame_time = 1.0 / self.fps
-                    process_time = time.perf_counter() - t
-                    sleep_time = target_frame_time - process_time
-                    if sleep_time > 0:
-                        time.sleep(sleep_time)
-                
+                    rgb = to_rgb(payload, self._grabber.source.fmt, self.cam_w, self.cam_h, self.rotation, self.hflip)
+                    sample = self._process(rgb, t_capture)
                 except Exception as e:
                     print(f"[PoseWorker] Error in MediaPipe processing: {e}")
                     time.sleep(0.01)
-        
-        except Exception as e:
-            print(f"[PoseWorker] Error in main loop: {e}")
-        
+                    continue
+                now = time.perf_counter()
+                self.processed += 1
+                self.detections += int(sample.detected)
+                self.inference_rate.tick(1, now)
+                self.latency_ms.append((now - t_capture) * 1000.0)
+                if not put_counting(self.queue, sample):
+                    self.dropped_samples += 1
         finally:
-            try:
-                if self._cam:
-                    self._cam.release()
-                if self._pose_processor:
-                    self._pose_processor.close()
-            except Exception:
-                pass
-    
+            processor, self._pose_processor = self._pose_processor, None
+            if processor is not None:
+                try:
+                    processor.close()
+                except Exception:
+                    pass
+
     # ---------- Public API ----------
     def start(self):
-        """Start pose acquisition with MediaPipe."""
+        """Open the camera, load MediaPipe and start the capture and inference threads."""
         self._stop.clear()
+        source = open_frame_source(self.backend, self.idx, self.cam_w, self.cam_h, self.fps, self.cam_file,
+                                   self.constant_fps)
+        self.source_name = type(source).__name__
         try:
-            self._open_camera()
             self._init_mediapipe()
         except Exception:
-            # _open_camera may succeed while MediaPipe initialization fails.
-            # Release the camera immediately so a retry does not leak a device.
-            self._release_resources()
+            source.close()
             raise
-        
-        self._thread = threading.Thread(target=self._loop, daemon=True)
+        self._grabber = LatestFrameGrabber(source)
+        self._grabber.start()
+        self._thread = threading.Thread(target=self._loop, name="pose-inference", daemon=True)
         self._thread.start()
-        
-        print(f"[PoseWorker] Started - Camera {self.idx} ({self.cam_w}x{self.cam_h} @ {self.fps}fps)")
-    
-    def stop(self):
-        """Stop acquisition and release resources."""
-        print("[PoseWorker] Stopping MediaPipe...")
-        
-        self._stop.set()
-        if self._thread:
-            self._thread.join(timeout=2.0)
-            self._thread = None
-        self._release_resources()
-        print("[PoseWorker] Stopped correctly")
+        print(f"[PoseWorker] Started - {self.source_name} {self.cam_w}x{self.cam_h} @ {self.fps} fps, "
+              f"model_complexity={self.model_complexity}")
 
-    def _release_resources(self):
-        """Release camera and MediaPipe resources exactly once."""
-        try:
-            if self._cam is not None:
-                self._cam.release()
-        finally:
-            self._cam = None
-        try:
-            if self._pose_processor is not None:
-                self._pose_processor.close()
-        finally:
-            self._pose_processor = None
+    @property
+    def frames_dropped(self) -> int:
+        return self._grabber.dropped if self._grabber else 0
+
+    def stop(self):
+        """Signal both threads; each releases the resource it owns."""
+        self._stop.set()
+        if self._grabber:
+            self._grabber.stop()
+        if self._thread:
+            self._thread.join(timeout=5.0)
+            if self._thread.is_alive():
+                print("[PoseWorker] WARNING: inference thread still busy; it will release MediaPipe on exit")
+            self._thread = None

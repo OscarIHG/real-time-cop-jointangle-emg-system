@@ -23,25 +23,30 @@ This directory contains Arduino sketches for the ESP32 microcontroller used in t
 
 ## Production Firmware (`esp32_firmware.ino`)
 
-The main firmware that reads a **real analog EMG signal** from pin `A0` at 1000 Hz and transmits it over Bluetooth Classic (SPP). The ADC input and transmitted voltage range are limited to 0–3.3 V.
+Streams one voltage sample per line (`0.1234\r\n`) over Bluetooth Classic (SPP) at **100 Hz** (hardware timer, `SAMPLE_RATE_HZ`). This matches the paper and `emg_sample_rate_hz` in `config.yaml`. Streaming starts on `'1'` and stops on `'2'` or when the client disconnects.
 
-Use this when your ESP32 is connected to the physical EMG amplifier circuit.
+| `EMG_SIMULATED` | Source |
+|-----------------|--------|
+| `1` (default)   | Synthetic sEMG, while the AD8832 module is not connected (avoids streaming the noise of a floating ADC pin) |
+| `0`             | AD8832 output on `A0`, read with `analogReadMilliVolts` (calibrated, 0-3.3 V) |
 
 ---
 
 ## EMG Simulator (`emg_simulator/`)
 
-A test firmware that generates a **synthetic EMG signal** over Bluetooth Classic (SPP). Use this to verify the acquisition GUI and signal pipeline without needing the physical EMG module or analog circuitry.
+The same firmware with `EMG_SIMULATED 1` fixed, advertised as `ESP32_EMG_Sim`. Use it to verify the acquisition GUI and signal pipeline without the physical EMG module.
 
 ### Signal Characteristics
 
-| Parameter       | Value                                    |
-|-----------------|------------------------------------------|
-| Baseline        | ~0.5 V with white noise                  |
-| Burst amplitude | ~2.5 V peak                              |
-| Burst interval  | Every 3 seconds (600 ms duration)        |
-| Sample rate     | 1000 Hz                                  |
-| Output range    | 0.0 – 3.3 V (clamped)                   |
+The model and its xorshift32 PRNG are mirrored in `acquisition_systems/workers/emg_sim.py`, so the Python fallback (`emg_source: auto`/`simulated`) produces the same sequence. Keep the two in sync.
+
+| Parameter       | Value                                                    |
+|-----------------|----------------------------------------------------------|
+| Baseline        | 0.30 V DC + rectified, smoothed Gaussian tonic activity  |
+| Bursts          | every 5 s (first at 2 s), 1 s raised cosine, ~1.2 V peak |
+| Interference    | deliberate 60 Hz sinusoid, 0.10 V (appears at 40 Hz when sampled at 100 Hz) |
+| Sample rate     | 100 Hz                                                   |
+| Output range    | 0.0 - 3.3 V (never clips at 0 V)                         |
 
 ### LED Feedback
 
@@ -49,13 +54,21 @@ A test firmware that generates a **synthetic EMG signal** over Bluetooth Classic
 |--------------------|--------------------------------------|
 | Blinking (500 ms)  | Waiting for Bluetooth connection     |
 | Solid ON           | Connected and transmitting data      |
-| OFF                | Stopped (received stop token `'2'`)  |
+| OFF                | Stopped (stop token or disconnect)   |
 
 ### How to Flash
 
-1. Open `emg_simulator/emg_simulator.ino` in the Arduino IDE.
+1. Open `esp32_firmware.ino` (or `emg_simulator/emg_simulator.ino`) in the Arduino IDE.
 2. Select **Board:** `ESP32 Dev Module`.
 3. Select the correct **Port** (USB serial).
 4. Click **Upload**.
-5. Pair the device (named `ESP32_EMG_Sim`) via your OS Bluetooth settings.
+5. Pair the device via your OS Bluetooth settings.
 6. Update `config.yaml` with the assigned COM port (Windows) or MAC address (Linux).
+
+From the command line (e.g. on the Raspberry Pi):
+
+```bash
+arduino-cli core install esp32:esp32@2.0.17
+arduino-cli compile --fqbn esp32:esp32:esp32 esp32_firmware
+arduino-cli upload  --fqbn esp32:esp32:esp32 -p /dev/ttyACM0 esp32_firmware
+```

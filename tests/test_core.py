@@ -39,6 +39,18 @@ class CoreBehaviourTests(unittest.TestCase):
         landmarks[23, 0] = math.nan
         self.assertTrue(math.isnan(pelvic_obliquity_deg_from_landmarks(landmarks)))
 
+    def test_pelvic_angle_sign_and_visibility_gate(self):
+        # Frontal view: subject's left hip (23) appears on the image right.
+        landmarks = np.full((33, 2), np.nan, dtype=float)
+        landmarks[23] = [400.0, 290.0]   # left hip higher (smaller image y)
+        landmarks[24] = [300.0, 300.0]
+        self.assertGreater(pelvic_obliquity_deg_from_landmarks(landmarks), 0.0)
+        landmarks[23] = [400.0, 300.0]
+        self.assertAlmostEqual(pelvic_obliquity_deg_from_landmarks(landmarks), 0.0)
+        vis = np.ones(33)
+        vis[24] = 0.2
+        self.assertTrue(math.isnan(pelvic_obliquity_deg_from_landmarks(landmarks, vis, 0.5)))
+
     def test_recorder_is_bounded_and_resets(self):
         recorder = Recorder(max_samples_per_stream=2)
         recorder.push_emg(EmgSample(0.0, 1.0))
