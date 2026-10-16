@@ -33,7 +33,12 @@ This repository provides a software implementation designed for Raspberry Pi 4 (
 
 ## Installation
 
-A single setup script per platform installs everything into an isolated Python 3.11 environment inside the repository folder (`venv/`). The system Python is never modified.
+One command per platform installs everything into an isolated Python 3.11 environment inside the repository folder (`venv/`). The system Python is never modified, and the scripts are safe to run again (anything already installed is skipped).
+
+Every download is pinned to a fixed version and verified automatically, so there are no checksums to compute by hand:
+
+* Phidgets apt repository: verified by its GPG key fingerprint.
+* Micromamba, `uv` and the Windows Phidget22 installer: verified by SHA-256.
 
 ### 1. Clone the repository
 ```bash
@@ -41,56 +46,71 @@ git clone https://github.com/OscarIHG/real-time-cop-jointangle-emg-system.git
 cd real-time-cop-jointangle-emg-system
 ```
 
-### 2. Environment Setup
+### 2. Run the setup script
 
-**For Linux / Raspberry Pi OS (64-bit):**
-
-`setup.sh` installs system dependencies, the Phidget22 library, USB permissions for the force plate, Bluetooth SPP support for the ESP32, and a Python 3.11 environment via Micromamba.
-
-The script verifies the two files it downloads (the Phidgets installer and Micromamba) against a SHA-256 checksum before running them, so it refuses to proceed if the checksums are not provided. Compute them first:
+**Raspberry Pi OS / Debian (64-bit)**
 
 ```bash
-curl -sL https://www.phidgets.com/downloads/setup_linux | sha256sum
-curl -sL https://micro.mamba.pm/api/micromamba/linux-aarch64/latest | sha256sum
+./setup.sh
 ```
 
-Then run the setup with both values:
+It asks for your `sudo` password once, then:
 
-```bash
-chmod +x setup.sh
-PHIDGETS_INSTALLER_SHA256="<first hash>" MICROMAMBA_SHA256="<second hash>" ./setup.sh
-```
+1. Installs system packages: camera tools, Bluetooth and the OpenCV runtime libraries.
+2. Installs the Phidget22 driver from the vendor's signed apt repository.
+3. Sets USB permissions for the PhidgetBridge (udev rule and the `plugdev`, `dialout` and `video` groups).
+4. Enables Bluetooth Classic SPP (`bluetoothd --compat`) for the ESP32.
+5. Creates `venv/` with Micromamba and installs `requirements.txt`.
+6. Runs the diagnostic (see below).
 
-After the script finishes, log out and back in (or reboot) so the `plugdev` group membership applies to the force plate.
+If the script added you to a group, **log out and back in (or reboot)** before using the force plate.
 
-**For Windows 10/11:**
-
-`setup.ps1` downloads a pinned release of `uv`, verifies its SHA-256, and uses it to create the Python 3.11 environment. Obtain the checksum of `uv-x86_64-pc-windows-msvc.zip` from the [uv release page](https://github.com/astral-sh/uv/releases) for the pinned version (see `$uv_version` in the script) and run:
+**Windows 10/11**
 
 ```powershell
-$env:UV_SHA256 = "<sha256>"
 .\setup.ps1
 ```
 
-If `uv_bin\uv.exe` is already present, the download is skipped and `UV_SHA256` is not needed.
+If PowerShell refuses to run scripts, use `powershell -ExecutionPolicy Bypass -File .\setup.ps1` once. The script:
 
-### 3. Reinstalling from scratch
+1. Installs a pinned `uv` in `uv_bin\`.
+2. Opens the Phidget22 driver installer: accept the administrator prompt and click through it.
+3. Creates `venv\` with an isolated Python 3.11 and installs `requirements.txt`.
+4. Runs the diagnostic.
 
-To rebuild the environment on an existing installation, remove the generated folders and run the setup script again:
+**Options**
+
+| Linux | Windows | Effect |
+|-------|---------|--------|
+| `./setup.sh --clean` | `.\setup.ps1 -Clean` | Delete `venv` and rebuild it from scratch |
+| `./setup.sh --yes` | — | Do not ask for confirmation (unattended runs) |
+| — | `.\setup.ps1 -SkipDriver` | Do not install the Phidget22 driver |
+
+### 3. Check the installation and hardware
+
+The setup ends with a diagnostic, which you can run again at any time:
 
 ```bash
-git pull origin master
-rm -rf venv bin .mamba_root      # Linux
-# Remove-Item -Recurse venv, uv_bin   # Windows
+./venv/bin/python -m acquisition_systems.doctor           # Linux / Raspberry Pi
+.\venv\Scripts\python.exe -m acquisition_systems.doctor   # Windows
 ```
 
-### 4. Hardware Pairing (First-time Linux Setup)
-If running on a fresh Raspberry Pi installation, you **must** pair the ESP32 manually via the terminal before running the software. 
+It prints `OK` / `WARN` / `FAIL` for:
 
-> [!NOTE]
-> It is highly probable that the Raspberry Pi Desktop Bluetooth GUI will fail to discover the ESP32 or result in a blank list, which is why we do it directly from the CLI.
+* Python and every library.
+* `config.yaml`.
+* The PhidgetBridge.
+* The camera.
+* The ESP32 pairing (Linux) or COM port (Windows).
+* The graphical display.
 
-Ensure the ESP32 is powered on, then run the native CLI tool:
+Every problem comes with a hint on how to fix it. Missing hardware is only a warning: each module runs on its own, and the EMG falls back to the built-in simulator. Use `--quick` to skip opening the force plate and the camera.
+
+### 4. Pair the ESP32 (one time, manual on both platforms)
+
+Pairing needs a confirmation from the operating system, so it is not automated.
+
+**Raspberry Pi:** the desktop Bluetooth applet often fails to list the ESP32, so pair it from the terminal with the ESP32 powered on:
 
 ```bash
 bluetoothctl
@@ -100,6 +120,12 @@ bluetoothctl
 [bluetoothctl] trust XX:XX:XX:XX:XX:XX
 [bluetoothctl] quit
 ```
+
+Then set `emg_mac: "XX:XX:XX:XX:XX:XX"` in `config.yaml`.
+
+**Windows:** pair the ESP32 in *Settings → Bluetooth & devices*. In *Device Manager → Ports (COM & LPT)*, find the **Outgoing** port of the ESP32 and set `emg_com_port: "COMx"` in `config.yaml`. The diagnostic lists the Bluetooth COM ports it finds.
+
+Run the diagnostic again. Both checks should report `OK`.
 
 ---
 
@@ -192,8 +218,8 @@ real-time-cop-jointangle-emg-system/
 ├── README.md                 # Setup, usage and troubleshooting guide
 ├── config.yaml               # Hardware configuration parameters
 ├── requirements.txt          # Pinned Python dependencies
-├── setup.sh                  # Installer script (Linux / Raspberry Pi)
-├── setup.ps1                 # Installer script (Windows)
+├── setup.sh                  # One-command installer (Linux / Raspberry Pi)
+├── setup.ps1                 # One-command installer (Windows)
 ├── esp32_firmware/           # ESP32 Arduino sketches
 │   ├── README.md             # Firmware docs & Core version warning
 │   ├── esp32_firmware.ino    # Production firmware (100 Hz; EMG_SIMULATED switch)
@@ -211,6 +237,7 @@ real-time-cop-jointangle-emg-system/
     ├── app_qt.py             # PyQtGraph GUI
     ├── app_tk.py             # Tkinter + Matplotlib GUI (blitting)
     ├── session.py            # Central coordinator + headless runner
+    ├── doctor.py             # Installation and hardware diagnostic
     ├── postprocess.py        # Butterworth + Hilbert pipeline
     ├── recorder.py           # Bounded buffers and CSV export
     ├── common/
@@ -230,10 +257,14 @@ real-time-cop-jointangle-emg-system/
 
 ## Troubleshooting
 
+Start with the diagnostic: `python -m acquisition_systems.doctor`. It prints a fix for every problem it detects.
+
 * **ESP32 Arduino Core Version (Critical):** You **must** compile the ESP32 firmware using **Arduino Core version 2.0.17** (or any 2.x release). Core 3.x introduced breaking changes to the Bluetooth Classic (SPP) stack that cause COM port hangs and connection failures on Windows 10/11. The device may appear paired but the serial link will never establish. For full firmware installation instructions, see [Module 2: ESP32 EMG in the Hardware Wiki](https://github.com/OscarIHG/real-time-cop-jointangle-emg-system/wiki/Module-2-ESP32-EMG).
 * **Windows Bluetooth Connections:** If the Bluetooth port becomes unresponsive, remove the device from Windows Bluetooth Settings, restart the ESP32, and pair it again. Update the `emg_com_port` parameter in `config.yaml` to the newly assigned **Outgoing** COM port (not the Incoming one). You can identify the correct port in Device Manager under Bluetooth → look for the port whose Hardware ID contains your ESP32's MAC address.
 * **Linux Bluetooth Connections:** Verify that the ESP32 is trusted and paired using the `bluetoothctl` utility prior to execution.
-* **Force Plate (Phidget) Access Denied (Linux):** If you see `Phidgets were detected, but access is denied`, Linux `udev` rules have not been applied to the connected device yet. Physically unplug the Phidget's USB cable from the Raspberry Pi, wait 2 seconds, and plug it back in.
+* **Force Plate (Phidget) Access Denied (Linux):** If you see `Phidgets were detected, but access is denied`, the `udev` rule has not been applied to the connected device yet. Unplug the Phidget's USB cable, wait 2 seconds and plug it back in. If you just ran `setup.sh`, also log out and back in.
+* **Force Plate on Windows:** the PhidgetBridge needs the Phidget22 driver (`setup.ps1` opens its installer). Re-run `.\setup.ps1` or install it from [phidgets.com/docs/OS_-_Windows](https://www.phidgets.com/docs/OS_-_Windows). Only one program can use the bridge at a time: close the Phidget Control Panel before starting the application.
+* **PowerShell blocks `setup.ps1`:** run it once with `powershell -ExecutionPolicy Bypass -File .\setup.ps1`.
 * **Camera Initialization:** USB cameras use `cam_index` (0 is usually the first camera). CSI cameras (Rpi P5V04A V1.3) are only reachable through libcamera on Raspberry Pi OS Bookworm/Trixie: check `rpicam-hello --list-cameras`, then use `cam_backend: rpicam` (or `auto`). If the image is upside down, set `cam_rotation: 180` rather than flipping the frame.
 * **Power-line notch at 100 Hz:** at 100 Hz the Nyquist frequency is 50 Hz, so 60 Hz interference is aliased to 40 Hz. The notch targets the aliased frequency automatically.
 * **EMG Simulator:** without the AD8832, flash `esp32_firmware.ino` with `EMG_SIMULATED 1` (default) or `emg_simulator/`. With the ESP32 off, `emg_source: auto` uses the identical built-in simulator. See [`esp32_firmware/README.md`](esp32_firmware/README.md).
