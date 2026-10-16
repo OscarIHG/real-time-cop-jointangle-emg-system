@@ -6,11 +6,12 @@
 // at SAMPLE_RATE_HZ (100 Hz, as in the paper) after receiving '1'; '2' or a
 // client disconnect stops the stream.
 //
-// EMG_SIMULATED = 1 : no AD8832 connected -> synthetic sEMG (tonic activity,
+// EMG_SIMULATED = 1 : no AD8232 connected -> synthetic sEMG (tonic activity,
 //                     periodic bursts and a deliberate 60 Hz component). The
 //                     model and PRNG mirror acquisition_systems/workers/emg_sim.py;
 //                     keep both in sync.
-// EMG_SIMULATED = 0 : read the AD8832 output on A0 (calibrated millivolts).
+// EMG_SIMULATED = 0 : read the AD8232 envelope on A0 = GPIO36 (calibrated millivolts).
+//                     PCB design: hardware/emg_pcb/README.md
 //
 // IMPORTANT: Compile with ESP32 Arduino Core version 2.0.17 or earlier.
 //            Core 3.x has known Bluetooth Classic (SPP) compatibility issues
@@ -25,7 +26,7 @@
 #error Bluetooth is not enabled! Please run `make menuconfig` to and enable it
 #endif
 
-#define EMG_SIMULATED 1            // set to 0 once the AD8832 module is wired to A0
+#define EMG_SIMULATED 1            // set to 0 once the AD8232 module is wired to A0
 
 BluetoothSerial SerialBT;
 

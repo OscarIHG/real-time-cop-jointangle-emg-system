@@ -2,7 +2,7 @@
 // ESP32 EMG Simulator Firmware
 // =============================================================================
 // Synthetic sEMG over Bluetooth Classic (SPP) for testing the acquisition
-// system without the AD8832 front-end. Identical to esp32_firmware.ino with
+// system without the AD8232 front-end. Identical to esp32_firmware.ino with
 // EMG_SIMULATED = 1, but advertised as "ESP32_EMG_Sim".
 //
 // Protocol:

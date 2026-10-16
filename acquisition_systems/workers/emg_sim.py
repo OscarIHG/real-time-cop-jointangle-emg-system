@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-Synthetic sEMG source used while the AD8832 front-end is not connected.
+Synthetic sEMG source used while the AD8232 front-end is not connected.
 
 ``EmgSignalModel`` is mirrored line by line in the ESP32 firmware
 (esp32_firmware/esp32_firmware.ino with EMG_SIMULATED=1 and

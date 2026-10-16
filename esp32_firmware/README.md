@@ -27,8 +27,8 @@ Streams one voltage sample per line (`0.1234\r\n`) over Bluetooth Classic (SPP) 
 
 | `EMG_SIMULATED` | Source |
 |-----------------|--------|
-| `1` (default)   | Synthetic sEMG, while the AD8832 module is not connected (avoids streaming the noise of a floating ADC pin) |
-| `0`             | AD8832 output on `A0`, read with `analogReadMilliVolts` (calibrated, 0-3.3 V) |
+| `1` (default)   | Synthetic sEMG, while the AD8232 module is not connected (avoids streaming the noise of a floating ADC pin) |
+| `0`             | AD8232 output on `A0`, read with `analogReadMilliVolts` (calibrated, 0-3.3 V) |
 
 ---
 
