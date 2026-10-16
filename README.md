@@ -14,6 +14,8 @@ Based on the paper: *"Design of a System for the Real-Time Acquisition of Center
 
 For complete hardware specifications, assembly instructions, schematics, and the Bill of Materials (BOM), please visit the project's [GitHub Wiki](https://github.com/OscarIHG/real-time-cop-jointangle-emg-system/wiki).
 
+The design specification for the sEMG PCB (ESP32-WROOM-32E + AD8232, battery powered) is in [`hardware/emg_pcb/README.md`](hardware/emg_pcb/README.md). The paper's "AD8832" is the AD8232.
+
 ---
 
 ## Features
@@ -22,10 +24,10 @@ This repository provides a software implementation designed for Raspberry Pi 4 (
 
 * **Central coordinator:** `acquisition_systems/session.py` synchronises the three modules, routes every sample to the recorder, measures real rates and stores the dataset. It runs behind either GUI or headless over SSH.
 * **Data Visualization:** two interchangeable GUIs with the paper's 2x2 layout (Abdominal EMG, Center of Pressure, Body-Tracking, Joint Angle): PyQtGraph (`gui_backend: qt`, default, fastest on the Raspberry Pi) and Tkinter + Matplotlib with blitting (`gui_backend: tk`, the toolkit used in the paper).
-* **EMG Sampling:** ESP32 firmware (`esp32_firmware/`) samples at 100 Hz (as in the paper) with a hardware timer and transmits 0-3.3 V readings over Bluetooth Classic (SPP). With `EMG_SIMULATED 1` it generates a synthetic sEMG (tonic activity, periodic bursts and a deliberate 60 Hz component) while the AD8832 is not connected.
+* **EMG Sampling:** ESP32 firmware (`esp32_firmware/`) samples at 100 Hz (as in the paper) with a hardware timer and transmits 0-3.3 V readings over Bluetooth Classic (SPP). With `EMG_SIMULATED 1` it generates a synthetic sEMG (tonic activity, periodic bursts and a deliberate 60 Hz component) while the AD8232 is not connected.
 * **Simulator fallback:** with `emg_source: auto` the receiver falls back to the same synthetic signal (identical model and PRNG as the firmware) when the ESP32 is off.
 * **Force plate:** PhidgetBridge 1046_1 at 125 Hz, CoP from Eqs. (1)-(2) of the paper using the distances between load-cell centres (48.38 x 33.04 cm), event-driven tare after the bridge self-calibration, NaN when the plate is unloaded.
-* **Pose Estimation:** MediaPipe Pose (33 landmarks, `model_complexity: 0`) on the newest frame from a dedicated capture thread; USB/V4L2 cameras through OpenCV and CSI cameras (Rpi P5V04A V1.3) through `rpicam-vid`.
+* **Pose Estimation:** MediaPipe Pose (33 landmarks, `model_complexity: 0`) runs on the newest frame from a dedicated capture thread. The recommended camera is a **USB UVC camera (HBVCAM-W202012HD)**, read through OpenCV and validated on the Raspberry Pi 4. The paper's CSI camera (Rpi P5V04A V1.3) is supported through `rpicam-vid` but has not been validated (see [Camera](#camera)).
 * **Data Recording:** native-rate CSVs per stream, a merged CSV on the EMG timeline (other streams matched "as of" with staleness limits) and a metadata JSON (config, emg source, effective rates, tare, drops).
 * **Signal Processing:** real-time 60 Hz notch by FFT -> remove -> inverse FFT. It is alias-aware: sampled at 100 Hz, 60 Hz interference appears at 40 Hz. A streaming IIR alternative is available (`emg_notch_method: iir`). Post-processing applies a 6th-order Butterworth low-pass (10 Hz) and the Hilbert envelope.
 
@@ -186,6 +188,17 @@ The same tests, plus syntax checks of the installer scripts, run automatically o
 
 ---
 
+## Camera
+
+| Camera | Status | Connection | Notes |
+|--------|--------|------------|-------|
+| **HBVCAM-W202012HD (USB UVC)** | **Recommended**, validated on the Raspberry Pi 4 | USB | Works on Raspberry Pi and Windows; default `cam_backend: auto` |
+| Rpi P5V04A V1.3 (CSI, OV5647) | Used in the paper; supported, **not validated** | CSI ribbon | Raspberry Pi only, through libcamera (`rpicam-vid`) |
+
+With `cam_backend: auto`, a detected CSI camera is used first; otherwise the USB camera at `cam_index` is used. To force the USB camera even when a CSI module is attached, set `cam_backend: opencv`.
+
+---
+
 ## Configuration (`config.yaml`)
 
 All hardware parameters live in `config.yaml`. The most common ones to adjust:
@@ -225,8 +238,10 @@ real-time-cop-jointangle-emg-system/
 │   ├── esp32_firmware.ino    # Production firmware (100 Hz; EMG_SIMULATED switch)
 │   └── emg_simulator/        # Same firmware, always simulated ("ESP32_EMG_Sim")
 ├── hardware/
-│   └── 3d_prints/
-│       └── camera_enclosure/ # 3D printable STL files for camera mount
+│   ├── 3d_prints/
+│   │   └── camera_enclosure/ # 3D printable STL files for camera mount
+│   └── emg_pcb/
+│       └── README.md         # Design specification of the sEMG PCB (ESP32 + AD8232)
 ├── scripts/
 │   ├── post_process_emg.py   # Offline Butterworth + Hilbert processing
 │   └── hw_benchmark.py       # Console checks: rates, fps, jitter, render cost
@@ -265,6 +280,7 @@ Start with the diagnostic: `python -m acquisition_systems.doctor`. It prints a f
 * **Force Plate (Phidget) Access Denied (Linux):** If you see `Phidgets were detected, but access is denied`, the `udev` rule has not been applied to the connected device yet. Unplug the Phidget's USB cable, wait 2 seconds and plug it back in. If you just ran `setup.sh`, also log out and back in.
 * **Force Plate on Windows:** the PhidgetBridge needs the Phidget22 driver (`setup.ps1` opens its installer). Re-run `.\setup.ps1` or install it from [phidgets.com/docs/OS_-_Windows](https://www.phidgets.com/docs/OS_-_Windows). Only one program can use the bridge at a time: close the Phidget Control Panel before starting the application.
 * **PowerShell blocks `setup.ps1`:** run it once with `powershell -ExecutionPolicy Bypass -File .\setup.ps1`.
-* **Camera Initialization:** USB cameras use `cam_index` (0 is usually the first camera). CSI cameras (Rpi P5V04A V1.3) are only reachable through libcamera on Raspberry Pi OS Bookworm/Trixie: check `rpicam-hello --list-cameras`, then use `cam_backend: rpicam` (or `auto`). If the image is upside down, set `cam_rotation: 180` rather than flipping the frame.
+* **Camera Initialization:** the recommended USB camera uses `cam_index` (0 is usually the first camera). On Raspberry Pi, a CSI camera (Rpi P5V04A V1.3) can only be reached through libcamera: check `rpicam-hello --list-cameras`, then use `cam_backend: rpicam` (or `auto`). If the image is upside down, set `cam_rotation: 180` instead of flipping the frame.
+* **Low USB camera frame rate in dim light:** many UVC cameras halve their frame rate in low light (7.6 instead of ~19 fps on the Pi 4). Add light, or set `cam_constant_fps: true` to keep the frame rate at the cost of a darker image.
 * **Power-line notch at 100 Hz:** at 100 Hz the Nyquist frequency is 50 Hz, so 60 Hz interference is aliased to 40 Hz. The notch targets the aliased frequency automatically.
-* **EMG Simulator:** without the AD8832, flash `esp32_firmware.ino` with `EMG_SIMULATED 1` (default) or `emg_simulator/`. With the ESP32 off, `emg_source: auto` uses the identical built-in simulator. See [`esp32_firmware/README.md`](esp32_firmware/README.md).
+* **EMG Simulator:** without the AD8232, flash `esp32_firmware.ino` with `EMG_SIMULATED 1` (default) or `emg_simulator/`. With the ESP32 off, `emg_source: auto` uses the identical built-in simulator. See [`esp32_firmware/README.md`](esp32_firmware/README.md).
