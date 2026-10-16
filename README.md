@@ -20,12 +20,14 @@ For complete hardware specifications, assembly instructions, schematics, and the
 
 This repository provides a software implementation designed for Raspberry Pi 4 (Raspberry Pi OS 64-bit) and Windows systems.
 
-* **Data Visualization:** Utilizes PyQt5 and PyQtGraph with OpenGL rendering for multi-plot data visualization.
-* **EMG Sampling:** Includes an ESP32 firmware sketch (`esp32_firmware/`) that samples at exactly 1000 Hz using a hardware timer and transmits 0–3.3 V readings over Bluetooth Classic (SPP).
-* **Bluetooth Connectivity:** Implements `socket.AF_BLUETOOTH` (Linux) and `pyserial` (Windows) executed in a dedicated background thread to manage hardware communication without blocking the main process.
-* **Pose Estimation:** Integrates MediaPipe to track skeletal joint angles dynamically.
-* **Data Recording:** Aligns data streams from the force plate, ESP32, and camera, exporting the synchronized data into a CSV format. Buffers are bounded and cleared between sessions, so the application can record several sessions without restarting.
-* **Signal Processing:** Applies a stable IIR notch filter (50/60 Hz) in real time and provides a post-processing script with a 6th-order Butterworth low-pass filter and Hilbert envelope.
+* **Central coordinator:** `acquisition_systems/session.py` synchronises the three modules, routes every sample to the recorder, measures real rates and stores the dataset. It runs behind either GUI or headless over SSH.
+* **Data Visualization:** two interchangeable GUIs with the paper's 2x2 layout (Abdominal EMG, Center of Pressure, Body-Tracking, Joint Angle): PyQtGraph (`gui_backend: qt`, default, fastest on the Raspberry Pi) and Tkinter + Matplotlib with blitting (`gui_backend: tk`, the toolkit used in the paper).
+* **EMG Sampling:** ESP32 firmware (`esp32_firmware/`) samples at 100 Hz (as in the paper) with a hardware timer and transmits 0-3.3 V readings over Bluetooth Classic (SPP). With `EMG_SIMULATED 1` it generates a synthetic sEMG (tonic activity, periodic bursts and a deliberate 60 Hz component) while the AD8832 is not connected.
+* **Simulator fallback:** with `emg_source: auto` the receiver falls back to the same synthetic signal (identical model and PRNG as the firmware) when the ESP32 is off.
+* **Force plate:** PhidgetBridge 1046_1 at 125 Hz, CoP from Eqs. (1)-(2) of the paper using the distances between load-cell centres (48.38 x 33.04 cm), event-driven tare after the bridge self-calibration, NaN when the plate is unloaded.
+* **Pose Estimation:** MediaPipe Pose (33 landmarks, `model_complexity: 0`) on the newest frame from a dedicated capture thread; USB/V4L2 cameras through OpenCV and CSI cameras (Rpi P5V04A V1.3) through `rpicam-vid`.
+* **Data Recording:** native-rate CSVs per stream, a merged CSV on the EMG timeline (other streams matched "as of" with staleness limits) and a metadata JSON (config, emg source, effective rates, tare, drops).
+* **Signal Processing:** real-time 60 Hz notch by FFT -> remove -> inverse FFT. It is alias-aware: sampled at 100 Hz, 60 Hz interference appears at 40 Hz. A streaming IIR alternative is available (`emg_notch_method: iir`). Post-processing applies a 6th-order Butterworth low-pass (10 Hz) and the Hilbert envelope.
 
 ---
 
@@ -107,7 +109,8 @@ Ensure the hardware components (ESP32, Camera, Force Plate) are connected. Verif
 
 **On Linux / Raspberry Pi:**
 ```bash
-./venv/bin/python -m acquisition_systems.app_gui
+./venv/bin/python -m acquisition_systems.app_gui            # GUI from gui_backend (qt by default)
+./venv/bin/python -m acquisition_systems.app_gui --gui tk   # Tkinter + Matplotlib (paper Fig. 3)
 ```
 
 **On Windows:**
@@ -115,27 +118,39 @@ Ensure the hardware components (ESP32, Camera, Force Plate) are connected. Verif
 .\venv\Scripts\python.exe -m acquisition_systems.app_gui
 ```
 
+Over SSH, run the GUI on the Pi's screen with `DISPLAY=:0 ./venv/bin/python -m acquisition_systems.app_gui`, or acquire without any GUI:
+
+```bash
+./venv/bin/python -m acquisition_systems.session --duration 20 [--emg-source simulated]
+```
+
 ### Data Acquisition Procedure
-1. Open the application.
-2. Set the **Duration** parameter (in seconds).
-3. Provide an optional **Base Filename**.
-4. Select **Start** to begin data acquisition.
-5. Select **Save CSV** after the acquisition period to export the synchronized data to the `sessions/` directory.
+1. Open the application. The hardware connects and the force plate is tared, so **keep the plate unloaded** until the status bar shows the live rates. Use **Tare** to re-zero at any time.
+2. Set the recording length in seconds.
+3. Provide an optional **Filename**.
+4. Select **Start** to record (**Stop** ends it early).
+5. Select **Save** to write the dataset to `sessions/<date>/`:
+   * `<name>.csv`: merged
+   * `<name>_emg.csv`, `<name>_cop.csv`, `<name>_pose.csv`: native rate
+   * `<name>_meta.json`
+   * `<name>_emg_processed.csv/.png`: post-processing
 
 ### Post-Processing
-To apply the Digital Signal Processing (DSP) steps (6th-order Butterworth low-pass filter at 10 Hz, followed by a Hilbert transform for amplitude envelope), run the standalone post-processing script:
+The GUI runs it automatically on Save. To re-run it (6th-order Butterworth low-pass at 10 Hz, then Hilbert envelope):
 
-**On Linux / Raspberry Pi:**
 ```bash
-./venv/bin/python scripts/post_process_emg.py
+./venv/bin/python scripts/post_process_emg.py [path/to/<name>_emg.csv] [--no-show] [--png out.png]
 ```
 
-**On Windows:**
-```powershell
-.\venv\Scripts\python.exe scripts\post_process_emg.py
+### Hardware checks and benchmarks
+```bash
+./venv/bin/python scripts/hw_benchmark.py cop      # PhidgetBridge rate, jitter, tare
+./venv/bin/python scripts/hw_benchmark.py camera --snapshot frame.jpg
+./venv/bin/python scripts/hw_benchmark.py pose [--file person.jpg]
+./venv/bin/python scripts/hw_benchmark.py emg --source simulated
+./venv/bin/python scripts/hw_benchmark.py dsp      # notch cost per tick
+./venv/bin/python scripts/hw_benchmark.py render   # matplotlib naive vs blitting vs PyQtGraph
 ```
-
-The script automatically finds the latest saved CSV in `sessions/`, writes a `_processed.csv` file with the filtered data and amplitude envelope, and opens a PyQtGraph window so you can compare the raw signal against the applied filters. Use `--no-show` on headless Raspberry Pi sessions, or pass a specific CSV path as the first argument.
 
 ### Running the tests
 ```bash
@@ -151,11 +166,16 @@ All hardware parameters live in `config.yaml`. The most common ones to adjust:
 
 | Key | Purpose |
 |-----|---------|
+| `gui_backend` | `qt` (PyQtGraph) or `tk` (Tkinter + Matplotlib) |
+| `emg_source` | `auto` (Bluetooth, falling back to the simulator), `bluetooth` or `simulated` |
 | `emg_mac` | Bluetooth MAC address of the ESP32 (Linux) |
 | `emg_com_port` | Outgoing COM port of the paired ESP32 (Windows only) |
-| `emg_vmin` / `emg_vmax` | Expected EMG voltage range (0–3.3 V for the ESP32 ADC) |
-| `cop_*` | Force plate dimensions, orientation flips, and sampling interval |
-| `cam_index` | Camera index (0 for the built-in webcam, 1/2 for USB cameras) |
+| `emg_sample_rate_hz` | Must match `SAMPLE_RATE_HZ` in the firmware (100) |
+| `emg_notch_method` | `fft` (paper) or `iir` (streaming, lowest CPU) |
+| `cop_gain` | Manufacturer factor in kg per V/V (200 kg / 1.0 mV/V = 200000), one value or four |
+| `cop_x_dist_cm` / `cop_y_dist_cm` | Distances between load-cell **centres** (48.38 / 33.04 cm), not the plate size |
+| `cop_interval_ms` | PhidgetBridge data interval (8 ms = 125 Hz) |
+| `cam_backend` / `cam_rotation` | `auto`, `opencv` (USB), `rpicam` (CSI) or `file`; physical rotation of the camera |
 | `recording_max_samples_per_stream` | Upper bound on buffered samples per stream during a recording |
 
 Boolean values must be written as `true` or `false`; the loader reports an error for malformed values instead of silently falling back to defaults.
@@ -176,26 +196,33 @@ real-time-cop-jointangle-emg-system/
 ├── setup.ps1                 # Installer script (Windows)
 ├── esp32_firmware/           # ESP32 Arduino sketches
 │   ├── README.md             # Firmware docs & Core version warning
-│   ├── esp32_firmware.ino    # Production firmware (real EMG, 1000 Hz)
-│   └── emg_simulator/        # Synthetic EMG signal generator for testing
+│   ├── esp32_firmware.ino    # Production firmware (100 Hz; EMG_SIMULATED switch)
+│   └── emg_simulator/        # Same firmware, always simulated ("ESP32_EMG_Sim")
 ├── hardware/
 │   └── 3d_prints/
 │       └── camera_enclosure/ # 3D printable STL files for camera mount
 ├── scripts/
-│   └── post_process_emg.py   # Offline Butterworth + Hilbert processing
+│   ├── post_process_emg.py   # Offline Butterworth + Hilbert processing
+│   └── hw_benchmark.py       # Console checks: rates, fps, jitter, render cost
 ├── tests/
-│   └── test_core.py          # Unit tests (config, DSP, recorder, utils)
+│   └── test_*.py             # Unit tests (DSP, CoP, EMG/simulator, recorder, core)
 └── acquisition_systems/
-    ├── app_gui.py            # Main GUI script
+    ├── app_gui.py            # GUI launcher (qt | tk)
+    ├── app_qt.py             # PyQtGraph GUI
+    ├── app_tk.py             # Tkinter + Matplotlib GUI (blitting)
+    ├── session.py            # Central coordinator + headless runner
+    ├── postprocess.py        # Butterworth + Hilbert pipeline
     ├── recorder.py           # Bounded buffers and CSV export
     ├── common/
     │   ├── config.py         # Strict YAML config loader
-    │   ├── dsp.py            # IIR notch and Butterworth filters
+    │   ├── dsp.py            # Alias-aware FFT/IIR notch, Butterworth, Hilbert
     │   ├── types.py          # Sample dataclasses
     │   └── utils.py          # Joint angle helpers
     └── workers/
         ├── emg.py            # Bluetooth socket/serial module
+        ├── emg_sim.py        # Synthetic sEMG model + simulated ESP32 link
         ├── cop.py            # Phidget force plate module
+        ├── camera.py         # OpenCV / rpicam / file frame sources
         └── pose.py           # MediaPipe joint angle module
 ```
 
@@ -207,5 +234,6 @@ real-time-cop-jointangle-emg-system/
 * **Windows Bluetooth Connections:** If the Bluetooth port becomes unresponsive, remove the device from Windows Bluetooth Settings, restart the ESP32, and pair it again. Update the `emg_com_port` parameter in `config.yaml` to the newly assigned **Outgoing** COM port (not the Incoming one). You can identify the correct port in Device Manager under Bluetooth → look for the port whose Hardware ID contains your ESP32's MAC address.
 * **Linux Bluetooth Connections:** Verify that the ESP32 is trusted and paired using the `bluetoothctl` utility prior to execution.
 * **Force Plate (Phidget) Access Denied (Linux):** If you see `Phidgets were detected, but access is denied`, Linux `udev` rules have not been applied to the connected device yet. Physically unplug the Phidget's USB cable from the Raspberry Pi, wait 2 seconds, and plug it back in.
-* **Camera Initialization:** Modify the `cam_index` parameter in `config.yaml` (index 0 typically corresponds to the integrated webcam).
-* **EMG Simulator Firmware:** An EMG simulator sketch is provided in `esp32_firmware/emg_simulator/` for testing the GUI without real EMG hardware. See [`esp32_firmware/README.md`](esp32_firmware/README.md) for details.
+* **Camera Initialization:** USB cameras use `cam_index` (0 is usually the first camera). CSI cameras (Rpi P5V04A V1.3) are only reachable through libcamera on Raspberry Pi OS Bookworm/Trixie: check `rpicam-hello --list-cameras`, then use `cam_backend: rpicam` (or `auto`). If the image is upside down, set `cam_rotation: 180` rather than flipping the frame.
+* **Power-line notch at 100 Hz:** at 100 Hz the Nyquist frequency is 50 Hz, so 60 Hz interference is aliased to 40 Hz. The notch targets the aliased frequency automatically.
+* **EMG Simulator:** without the AD8832, flash `esp32_firmware.ino` with `EMG_SIMULATED 1` (default) or `emg_simulator/`. With the ESP32 off, `emg_source: auto` uses the identical built-in simulator. See [`esp32_firmware/README.md`](esp32_firmware/README.md).

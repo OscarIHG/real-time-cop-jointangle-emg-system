@@ -1,8 +1,14 @@
 # =============================================================================
 # SYSTEM CONFIGURATION - REAL-TIME COP-JOINTANGLE-EMG
+# Defaults follow the published paper (CNIB 2025, IFMBE Proc. vol. 137).
 # =============================================================================
 
+# --- GUI ---
+gui_backend: qt             # qt = PyQtGraph (fastest) | tk = Tkinter + Matplotlib (as in the paper, Fig. 3)
+gui_update_ms: 33
+
 # --- EMG (ESP32 over RFCOMM) ---
+emg_source: auto            # auto = Bluetooth, falling back to the built-in simulator | bluetooth | simulated
 emg_mac: "68:FE:71:80:1F:CA"
 emg_com_port: "COM4"        # Windows ONLY: the COM port assigned to the paired ESP32
 emg_rfcomm_channel: 1
@@ -11,30 +17,47 @@ emg_vmax: 3.3
 emg_allow_lf: false         # set to true if your firmware sends LF instead of CRLF
 emg_start_token: "1"
 emg_stop_token: "2"
+emg_sample_rate_hz: 100     # must match the ESP32 firmware (SAMPLE_RATE_HZ)
+emg_connect_timeout_s: 5
+emg_powerline_hz: 60
+emg_notch_method: fft       # fft = FFT -> remove -> IFFT (paper) | iir = streaming notch (lower CPU)
+emg_notch_bandwidth_hz: 2.0
+emg_notch_harmonics: 1      # 60 Hz sampled at 100 Hz aliases to 40 Hz; harmonics alias to 20 Hz
 
 # --- Center of Pressure (force plate) ---
-cop_gain: 1.0
-cop_x_dist_cm: 55.88        # total width (2 * 27.94)
-cop_y_dist_cm: 40.54        # total height (2 * 20.27)
-cop_x_half_range_cm: 27.94  # ±27.94 cm along X (GUI)
-cop_y_half_range_cm: 20.27  # ±20.27 cm along Y (GUI)
-cop_interval_ms: 20         # 50 Hz
-cop_flip_x: false
-cop_flip_y: true   
+# Manufacturer gain in kg per V/V: capacity / rated output = 200 kg / 1.0 mV/V.
+# Use the value printed on each cell's certificate (list of four, sign allowed)
+# and verify with a known weight.
+cop_gain: 200000.0
+cop_x_dist_cm: 48.38        # distance between load-cell centres, long axis (55.88 - 2 * 3.75)
+cop_y_dist_cm: 33.04        # distance between load-cell centres, short axis (40.54 - 2 * 3.75)
+cop_x_half_range_cm: 27.94  # GUI limits, paper Fig. 3
+cop_y_half_range_cm: 20.32
+cop_interval_ms: 8          # 125 Hz (paper requires >= 80 Hz)
+cop_bridge_gain: 128
+cop_min_load_kg: 5.0        # below this total load the CoP is undefined (NaN)
+cop_cell_capacity_kg: 200.0
+cop_flip_x: true            # with the paper's literal equations these keep the on-screen
+cop_flip_y: true            # orientation of earlier releases (CH0 top-left, CH1 top-right)
 cop_swap_xy: false
 recording_max_samples_per_stream: 1000000
 
 # --- Pose / Camera ---
-# cam_index: Use 0 for built-in webcams, or 1/2 for connected USB cameras (especially on Windows).
+cam_backend: auto           # auto | opencv (USB/V4L2, Windows) | rpicam (CSI via rpicam-vid) | file
 cam_index: 0
 cam_width: 640
 cam_height: 480
 cam_fps: 30
+cam_rotation: 0             # 0/90/180/270 if the camera is mounted rotated
+cam_hflip: false
+cam_constant_fps: false     # true: UVC camera keeps its fps in dim light (darker image)
+pose_min_visibility: 0.5
 
 mediapipe_model_complexity: 0
 mediapipe_min_detection_confidence: 0.7
 mediapipe_min_tracking_confidence: 0.5
 
 # --- Plot windows (GUI) ---
-emg_plot_window: 150
-angle_plot_window: 40
+emg_plot_window: 5          # seconds
+angle_plot_window: 40       # seconds
+angle_plot_limit_deg: 40
