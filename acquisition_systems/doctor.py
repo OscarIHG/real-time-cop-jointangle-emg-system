@@ -78,7 +78,7 @@ def check_packages() -> bool:
         report(OK, "MediaPipe Pose API", "mp.solutions.pose available")
     except Exception as exc:
         all_ok = False
-        report(FAIL, "MediaPipe Pose API", str(exc), "install mediapipe>=0.10.14,<0.11 (see requirements.txt)")
+        report(FAIL, "MediaPipe Pose API", str(exc), "install mediapipe==0.10.14 (see requirements.txt)")
     return all_ok
 
 
@@ -271,7 +271,8 @@ def main(argv=None) -> int:
         print(f"\nResult: READY with {warns} warning(s) - review them above.")
     else:
         print("\nResult: READY - all checks passed.")
-    print("Start the application with:  python -m acquisition_systems.app_gui")
+    py_cmd = r".\venv\Scripts\python.exe" if os.name == "nt" else "./venv/bin/python"
+    print(f"Start the application with:  {py_cmd} -m acquisition_systems.app_gui")
     return 0
 
 
